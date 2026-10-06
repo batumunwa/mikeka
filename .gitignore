@@ -1,0 +1,96 @@
+# ---------------------------------------------------------------
+# Secrets: NEVER commit (API keys, DB password, encryption key)
+# Copy backend/Mikeka.Api/appsettings.Development.example.json to
+# appsettings.Development.json and fill in your own values.
+# ---------------------------------------------------------------
+appsettings.Development.json
+appsettings.Production.json
+appsettings.*.local.json
+*.env
+.env
+.env.*
+!.env.example
+secrets.json
+*.pfx
+*.pem
+*.key
+
+# ---------------------------------------------------------------
+# Runtime data: logs, betting-site screenshots/pages (contain
+# account details), Excel slip log, browser profile
+# ---------------------------------------------------------------
+backend/Mikeka.Api/logs/
+logs/
+*.log
+*.xlsx
+site-tabs.json
+MikekaChrome/
+
+# ---------------------------------------------------------------
+# .NET build output
+# ---------------------------------------------------------------
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Ll]og/
+publish/
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+TestResults/
+[Tt]est[Rr]esult*/
+*.trx
+coverage*.json
+coverage*.xml
+*.coverage
+
+# Playwright browsers / traces
+.playwright/
+playwright-report/
+test-results/
+*.zip.trace
+
+# ---------------------------------------------------------------
+# Visual Studio / Rider / VS Code
+# ---------------------------------------------------------------
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+.idea/
+*.DotSettings.user
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# ---------------------------------------------------------------
+# Frontend (Vite + React)
+# ---------------------------------------------------------------
+node_modules/
+frontend/dist/
+dist-ssr/
+*.local
+.vite/
+.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------------------------------------------------------------
+# OS files
+# ---------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
