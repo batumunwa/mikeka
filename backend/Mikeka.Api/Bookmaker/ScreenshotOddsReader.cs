@@ -60,10 +60,29 @@ public class ScreenshotOddsReader(IOptions<AnthropicOptions> options, ILogger<Sc
     /// (e.g. the cell labelled "Under 9.5" in the block titled "Total. Corners"), in pixels of <paramref name="screenshot"/>,
     /// with the odds shown in it. Null if it is not in this picture.
     /// </summary>
-    public async Task<CellLocation?> LocateCellAsync(byte[] screenshot, string target, CancellationToken ct)
+    /// <param name="above">The previous screenshot (scrolled a bit higher, overlapping), where the block's title may be; or null.</param>
+    public async Task<CellLocation?> LocateCellAsync(byte[] screenshot, byte[]? above, string target, CancellationToken ct)
     {
         if (!Configured) throw new InvalidOperationException("Set Anthropic:ApiKey in appsettings.Development.json: Coldbet odds are found from screenshots.");
         var (width, height) = PngSize(screenshot);
+        var content = new List<BetaContentBlockParam>();
+        if (above is not null)
+            content.Add(new BetaImageBlockParam { Source = new BetaBase64ImageSource { Data = Convert.ToBase64String(above), MediaType = MediaType.ImagePng } });
+        content.Add(new BetaImageBlockParam { Source = new BetaBase64ImageSource { Data = Convert.ToBase64String(screenshot), MediaType = MediaType.ImagePng } });
+        content.Add(new BetaTextBlockParam
+        {
+            Text = (above is null
+                       ? $"This {width}x{height} pixel screenshot shows part of the market grid of a football match on a betting site. "
+                       : "These two screenshots show the market grid of a football match on a betting site. The first is the part just above " +
+                         $"the second (the page was scrolled down between them, so they overlap). The second is {width}x{height} pixels. " +
+                         "A block's title may be in the first picture while its cells continue into the second. ") +
+                   $"Find {target}. " +
+                   "Ignore blocks with other titles (team totals such as \"Total 1.\", halves, combined markets). " +
+                   $"Return the x and y pixel coordinates of the centre of that cell in the {(above is null ? "" : "second ")}image, the odds printed in the cell, " +
+                   "and the cell's label exactly as shown. Report found=true only if the cell is fully visible in " +
+                   $"{(above is null ? "this image" : "the second image")} and you can tell it belongs to that block " +
+                   "(its title visible above it, possibly in the first picture); otherwise return found=false.",
+        });
         var response = await Client.Beta.Messages.Create(new MessageCreateParams
         {
             Model = options.Value.Model,
@@ -71,22 +90,7 @@ public class ScreenshotOddsReader(IOptions<AnthropicOptions> options, ILogger<Sc
             Betas = ["server-side-fallback-2026-06-01"],
             Fallbacks = new List<BetaFallbackParam> { new() { Model = "claude-opus-4-8" } },
             OutputConfig = new BetaOutputConfig { Effort = Effort.Low, Format = new BetaJsonOutputFormat { Schema = LocateSchema } },
-            Messages = [new BetaMessageParam
-            {
-                Role = Role.User,
-                Content = new List<BetaContentBlockParam>
-                {
-                    new BetaImageBlockParam { Source = new BetaBase64ImageSource { Data = Convert.ToBase64String(screenshot), MediaType = MediaType.ImagePng } },
-                    new BetaTextBlockParam
-                    {
-                        Text = $"This {width}x{height} pixel screenshot shows part of the market grid of a football match on a betting site. " +
-                               $"Find {target}. " +
-                               "Ignore blocks with other titles (team totals such as \"Total 1.\", halves, combined markets). " +
-                               "Return the x and y pixel coordinates of the centre of that cell in this image, the odds printed in the cell, " +
-                               "and the cell's label exactly as shown. If the block or the cell is not fully visible, return found=false.",
-                    },
-                },
-            }],
+            Messages = [new BetaMessageParam { Role = Role.User, Content = content }],
         }, ct);
         if (response.StopReason == "refusal") return null;
         var json = string.Concat(response.Content.Select(b => b.TryPickText(out var t) ? t.Text : ""));

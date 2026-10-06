@@ -51,8 +51,12 @@ public class ColdbetOptions
     public int GridDrawWaitMs { get; set; } = 2500;
     /// <summary>Pixels to scroll inside the grid between screenshots.</summary>
     public int GridScrollStep { get; set; } = 650;
+    /// <summary>Most screenshots taken while looking for the cell to click.</summary>
+    public int LocateMaxScreenshots { get; set; } = 10;
+    /// <summary>While looking for the cell: scroll this share of the visible grid between screenshots (overlap keeps block titles in view).</summary>
+    public double LocateScrollFraction { get; set; } = 0.6;
     /// <summary>BLOCK button of the "Show notifications" popup.</summary>
-    public string NotificationsBlock { get; set; } = "button:text-is('BLOCK'), button:text-is('Block')"; // exact text: "Collapse block" must not match
+    public string NotificationsBlock { get; set; } = @"text=/^\s*block\s*$/i"; // whole text only: "Collapse block" must not match
     /// <summary>Where each market lives: dropdown option + exact block title (match total, not team totals or halves).</summary>
     public MarketSection[] MarketSections { get; set; } =
     [
@@ -84,17 +88,22 @@ public class ColdbetOptions
     /// <summary>The bet type wanted when the slip has more than one selection.</summary>
     public string AccumulatorRegex { get; set; } = @"accumulator|express|multi|parlay|combo";
     public string BetSlipStakeInput { get; set; } = ".coupon-app__component input.ui-number-input__field";
-    public string BetSlipClear { get; set; } = ".coupon-app__component button.coupon-delete-bets";
+    /// <summary>The × that takes one selection out of the bet slip (inside a BetSlipItem).</summary>
+    public string BetSlipItemRemove { get; set; } = ".coupon-bet-remove";
+    public string BetSlipClear { get; set; } =".coupon-app__component button.coupon-delete-bets";
+    /// <summary>CLEAR in the "Clear bet slip?" question that follows the bin button.</summary>
+    /// (Its caption "Сlear" starts with a Cyrillic С, so it is found by its data-test, not by text.)
+    public string BetSlipClearConfirm { get; set; } = "[data-test='ui-popup']:has-text('bet slip') [data-test='ui-popup-submit']";
     /// <summary>One-click betting switch: when on, a click on the odds places a bet at once, so the system refuses to bet.</summary>
     public string OneClickSwitch { get; set; } = ".coupon-one-click input[type='checkbox']";
     /// <summary>The bet slip's main button ("REGISTRATION" when logged out).</summary>
-    public string BetSlipPlaceButton { get; set; } = ".coupon-app__component .coupon-buttons__button";
+    public string BetSlipPlaceButton { get; set; } = ".coupon-app__component .coupon-buttons button";
     /// <summary>The button text must match this before it is clicked.</summary>
     public string PlaceButtonTextRegex { get; set; } = @"^\s*(place|make)\s+(a\s+)?bet\s*$|^\s*bet\s*$";
     /// <summary>Where a confirmation with the bet number may appear after placing (bet slip, pop-ups).</summary>
     public string BetConfirmation { get; set; } = ".coupon-app__component, [role='dialog'], [class*='modal' i], [class*='popup' i], [class*='notification' i]";
     /// <summary>Bet number in the confirmation text; group 1 = the number. Needs a word like "bet" before it (event codes are numbers too).</summary>
-    public string BetIdRegex { get; set; } = @"\b(?:bet|coupon|ticket)\b\s*(?:no\.?|number|№|#|id)?\s*[:#№]?\s*(\d{6,})";
+    public string BetIdRegex { get; set; } = @"\b(?:bet(?:\s*slip)?|coupon|ticket)\b\s*(?:no\.?|number|№|#|id)?\s*[:#№]?\s*(\d{6,})"; // Coldbet: "Bet slip № 88383024337"
     public int ConfirmationWaitSeconds { get; set; } = 30;
 
     public string HistoryPath { get; set; } = "/en/office/history";
@@ -332,8 +341,22 @@ public sealed class ColdbetClient(
         return label;
     }
 
+    /// <summary>A click added another line of the right match (the grid moved before the click); it was taken out of the slip again.</summary>
+    private sealed class WrongCellException(string message) : Exception(message);
+
     /// <summary>Finds the pick's cell in screenshots of the market grid, clicks it, and checks the bet slip shows it.</summary>
     private async Task AddPickAsync(IPage page, Pick pick, CancellationToken ct)
+    {
+        try { await AddPickOnceAsync(page, pick, ct); }
+        catch (WrongCellException ex)
+        {
+            log.LogInformation("Coldbet: {Error} Removed it, trying once more.", ex.Message);
+            try { await AddPickOnceAsync(page, pick, ct); }
+            catch (WrongCellException again) { throw new InvalidOperationException(again.Message); }
+        }
+    }
+
+    private async Task AddPickOnceAsync(IPage page, Pick pick, CancellationToken ct)
     {
         // Ref = match url | dropdown option | block title | side | line, or for intervals
         //       match url | dropdown option | INTERVAL | Under | "{from}-{to} Under {line}" (see GetMatchesAsync).
@@ -364,30 +387,55 @@ public sealed class ColdbetClient(
         await DismissNotificationsPopupAsync(page);
         var grid = page.Locator(o.MarketGrid).First;
         await grid.ScrollIntoViewIfNeededAsync(new() { Timeout = 10_000 });
+        // Start at the very top of the grid, just below the sticky bar: the grid keeps its own scroll position from earlier reads,
+        // and starting part-way down a block hides the block's title.
+        var scrollers = await grid.EvaluateAsync<int>(GridToTopJs, await page.EvaluateAsync<float>(StickyTopBarBottomJs));
+        log.LogDebug("Coldbet: grid scrolled to top ({Scrollers} inner scroll areas reset)", scrollers);
         await page.WaitForTimeoutAsync(o.GridDrawWaitMs); // the odds are drawn on a canvas after the page loads: let it finish
         CellLocation? cell = null;
         (float x, float y) click = default;
+        (float x, float y, float width, float height) clip = default;
         var shots = new List<byte[]>();
-        for (int i = 0; i <= o.MaxGridScreenshots && cell is null; i++)
+        for (int i = 0; i <= o.LocateMaxScreenshots && cell is null; i++)
         {
             var box = await grid.BoundingBoxAsync() ?? throw new InvalidOperationException($"Market grid not shown for {teams}.");
+            // Only the part of the grid inside the window and below the site's sticky top bar (it hides block titles):
+            // a click must land on what the picture shows.
+            var viewHeight = page.ViewportSize?.Height ?? await page.EvaluateAsync<int>("() => window.innerHeight"); // your own Chrome: real window size
+            var barBottom = await page.EvaluateAsync<float>(StickyTopBarBottomJs);
             if (i > 0)
             {
-                await page.Mouse.MoveAsync(box.X + box.Width / 2, box.Y + Math.Min(box.Height / 2, 300));
-                await page.Mouse.WheelAsync(0, o.GridScrollStep);
+                // Overlapping steps, so a block's title and its lower cells are in the same or consecutive pictures.
+                var visible = viewHeight - Math.Max(box.Y, barBottom);
+                await page.Mouse.MoveAsync(box.X + box.Width / 2, Math.Max(box.Y, barBottom) + Math.Min(visible / 2, 300));
+                await page.Mouse.WheelAsync(0, Math.Max(150, (int)(visible * o.LocateScrollFraction)));
                 await page.WaitForTimeoutAsync(800);
                 box = await grid.BoundingBoxAsync() ?? box;
+                barBottom = await page.EvaluateAsync<float>(StickyTopBarBottomJs);
             }
-            // Only the part of the grid inside the window: a click must land on what the picture shows.
-            var viewHeight = page.ViewportSize?.Height ?? await page.EvaluateAsync<int>("() => window.innerHeight"); // your own Chrome: real window size
-            float top = Math.Max(box.Y, 0), bottom = Math.Min(box.Y + box.Height, viewHeight);
+            await DismissNotificationsPopupAsync(page); // it can appear late and cover the grid
+            float top = Math.Max(box.Y, barBottom), bottom = Math.Min(box.Y + box.Height, viewHeight);
             if (bottom - top < 50) continue;
             var shot = await page.ScreenshotAsync(new() { Clip = new() { X = box.X, Y = top, Width = box.Width, Height = bottom - top } });
+            if (shots.Count > 0 && shot.AsSpan().SequenceEqual(shots[^1])) break; // reached the bottom
+            cell = await reader.LocateCellAsync(shot, shots.Count > 0 ? shots[^1] : null, target, ct);
             shots.Add(shot);
-            cell = await reader.LocateCellAsync(shot, target, ct);
             // The picture has device pixels (Windows display scaling, e.g. 125%), the mouse works in page pixels.
             var scale = ScreenshotOddsReader.PngSize(shot).width / box.Width;
-            if (cell is not null) click = (box.X + (float)(cell.X / scale), top + (float)(cell.Y / scale));
+            if (cell is not null) (click, clip) = ((box.X + (float)(cell.X / scale), top + (float)(cell.Y / scale)), (box.X, top, box.Width, bottom - top));
+        }
+        // The grid can still move (late drawing, a block opening above): only click where a fresh picture looks the same.
+        var above = shots.Count > 1 ? shots[^2] : null; // the picture above the one the cell was found in
+        for (int check = 0; cell is not null && check < 3; check++)
+        {
+            await page.WaitForTimeoutAsync(700);
+            var fresh = await page.ScreenshotAsync(new() { Clip = new() { X = clip.x, Y = clip.y, Width = clip.width, Height = clip.height } });
+            if (fresh.AsSpan().SequenceEqual(shots[^1])) break;
+            log.LogInformation("Coldbet: grid changed before clicking for {Teams}, reading it again", teams);
+            cell = await reader.LocateCellAsync(fresh, above, target, ct);
+            shots.Add(fresh);
+            var scale = ScreenshotOddsReader.PngSize(fresh).width / clip.width;
+            if (cell is not null) click = (clip.x + (float)(cell.X / scale), clip.y + (float)(cell.Y / scale));
         }
         if (cell is null)
         {
@@ -408,11 +456,23 @@ public sealed class ColdbetClient(
         if (cell.Odds < rules.MinPickOdds || cell.Odds > rules.MaxPickOdds)
             throw new InvalidOperationException($"Odds moved for {teams}: {cell.Label} is now {cell.Odds}.");
 
-        await page.Mouse.ClickAsync(click.x, click.y);
-        await page.WaitForTimeoutAsync(1_500);
-
-        // The bet slip is real text: check the click added exactly this pick.
-        var item = await FindSlipItemAsync(page, pick);
+        // The bet slip is real text: check the click added exactly this pick. The canvas ignores an instant
+        // press+release and the slip can take a few seconds to update, so: a human-like click, a long wait, one retry.
+        ILocator? item = null;
+        for (int attempt = 1; attempt <= 2 && item is null; attempt++)
+        {
+            await page.Mouse.MoveAsync(click.x, click.y, new() { Steps = 5 });
+            await page.WaitForTimeoutAsync(300);
+            await page.Mouse.DownAsync();
+            await page.WaitForTimeoutAsync(120);
+            await page.Mouse.UpAsync();
+            for (int wait = 0; wait < 16 && item is null; wait++)
+            {
+                await page.WaitForTimeoutAsync(500);
+                item = await FindSlipItemAsync(page, pick);
+            }
+            if (item is null && attempt == 1) log.LogInformation("Coldbet: click on '{Label}' for {Teams} not in the bet slip after 8 s, clicking again", cell.Label, teams);
+        }
         if (item is null)
         {
             var missed = await SaveDebug(page, "click-missed", fullPage: false);
@@ -421,7 +481,15 @@ public sealed class ColdbetClient(
         var name = Regex.Replace(await item.Locator(o.BetSlipItemName).First.TextContentAsync() ?? "", @"\s+", " ").Trim();
         var odds = ParseNumber(await item.Locator(o.BetSlipItemOdds).First.TextContentAsync() ?? "");
         if (!SlipNameMatches(pick.Selection, name))
-            throw new InvalidOperationException($"The bet slip shows '{name}' for {teams}, not {SlipBuilder.SelectionText(pick.Selection)}.");
+        {
+            var wrong = $"The bet slip shows '{name}' for {teams}, not {SlipBuilder.SelectionText(pick.Selection)}.";
+            await SaveDebug(page, "wrong-cell", fullPage: false);
+            // Take the wrong line out again (its ×), so a retry or the final check sees a clean slip.
+            await item.Locator(o.BetSlipItemRemove).First.ClickAsync(new() { Timeout = 10_000 });
+            for (int i = 0; i < 10 && await FindSlipItemAsync(page, pick) is not null; i++) await page.WaitForTimeoutAsync(500);
+            if (await FindSlipItemAsync(page, pick) is not null) throw new InvalidOperationException(wrong + " It could not be removed.");
+            throw new WrongCellException(wrong);
+        }
         if (odds is null || odds < rules.MinPickOdds || odds > rules.MaxPickOdds)
             throw new InvalidOperationException($"The bet slip shows odds {odds} for {teams}, outside {rules.MinPickOdds}–{rules.MaxPickOdds}.");
         log.LogInformation("Coldbet: bet slip has {Teams}: {Name} @ {Odds}", teams, name, odds);
@@ -534,6 +602,8 @@ public sealed class ColdbetClient(
         if (await items.CountAsync() == 0) return;
         await OpenBetSlipAsync(page);
         await page.Locator(o.BetSlipClear).First.ClickAsync(new() { Timeout = 10_000 });
+        var confirm = page.Locator(o.BetSlipClearConfirm).Locator("visible=true").First;
+        if (await IsVisible(confirm, 3_000)) await confirm.ClickAsync(new() { Timeout = 5_000 });
         for (int i = 0; i < 10 && await items.CountAsync() > 0; i++) await page.WaitForTimeoutAsync(500);
         if (await items.CountAsync() > 0) throw new InvalidOperationException("Could not empty the bet slip.");
     }
@@ -694,7 +764,35 @@ public sealed class ColdbetClient(
         return shots;
     }
 
-    /// <summary>Picks the dropdown option and returns the title element of the wanted block, or null.</summary>
+    /// <summary>Bottom (page pixels) of the bars fixed to the top of the window (site header, menu), which cover the grid when scrolled.</summary>
+    private const string StickyTopBarBottomJs = """
+        () => {
+            let bottom = 0;
+            for (const el of document.querySelectorAll('body *')) {
+                const pos = getComputedStyle(el).position;
+                if (pos !== 'fixed' && pos !== 'sticky') continue;
+                const r = el.getBoundingClientRect();
+                if (r.top <= 2 && r.bottom > 0 && r.width > innerWidth / 2 && r.height < innerHeight / 3) bottom = Math.max(bottom, r.bottom);
+            }
+            return bottom;
+        }
+        """;
+
+    /// <summary>
+    /// Scrolls the grid's own scroll areas back to the top, then brings the grid's top edge just below the sticky bar
+    /// (scroll-margin works for the window and any scrolling container around the grid). Returns how many inner areas were reset.
+    /// </summary>
+    private const string GridToTopJs = """
+        (grid, bar) => {
+            const inner = [grid, ...grid.querySelectorAll('*')]
+                .filter(e => e.scrollHeight > e.clientHeight + 5 && /(auto|scroll)/.test(getComputedStyle(e).overflowY));
+            inner.forEach(e => e.scrollTop = 0);
+            grid.style.scrollMarginTop = (bar + 10) + 'px';
+            grid.scrollIntoView({ block: 'start', behavior: 'instant' });
+            return inner.length;
+        }
+        """;
+
     /// <summary>Closes Coldbet's "Show notifications" popup with BLOCK (no notifications), if it is showing.</summary>
     private async Task DismissNotificationsPopupAsync(IPage page)
     {

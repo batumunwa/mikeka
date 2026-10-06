@@ -23,7 +23,8 @@ public class LeonbetOptions
     /// <summary>Market block titles on a match page (seen on the live site on 2026-10-05).</summary>
     public LeonbetMarket[] Markets { get; set; } =
     [
-        new() { Market = "goals", Title = "Total", IntervalTitles = ["Total After {to} Minutes"] },
+        // Over/Under block, or the Yes/No block whose "No" means no goal from kickoff to minute {to}.
+        new() { Market = "goals", Title = "Total", IntervalTitles = ["Total After {to} Minutes", "Goal Scored In The First {to} Minutes"] },
         new() { Market = "result", IntervalTitles = ["{to} Minute Result", "{to} Minute Result - (1 To {to})"] },
         new() { Market = "corners", Title = "Total Corners" },
         new() { Market = "cards", Title = "Total Cards" },
@@ -196,28 +197,13 @@ public sealed class LeonbetClient(
                     }
                     else if (choice.IntervalFrom == 1 && site.IntervalTitles.Length > 0)
                     {
-                        // Leonbet's interval markets run from kickoff to minute N, on the "Intervals" tab.
-                        await OpenTabAsync(page, o.IntervalsTab);
+                        // Leonbet's interval markets run from kickoff to minute N, mostly on the "Intervals" tab
+                        // (some, like "Goal Scored In The First 5 Minutes", may sit under "All markets": both are tried).
                         var to = choice.IntervalTo!.Value.ToString(CultureInfo.InvariantCulture);
-                        foreach (var template in site.IntervalTitles)
+                        foreach (var tab in new[] { o.IntervalsTab, o.AllMarketsTab })
                         {
-                            var title = template.Replace("{to}", to);
-                            if (site.Market == "result")
-                            {
-                                if (await ReadDrawAsync(page, title) is { } drawOdds)
-                                {
-                                    sels.Add(new Selection("result", "Draw", 0, drawOdds, $"{m.url}|{title}|X", choice.IntervalKey, $"{title}: X (draw)"));
-                                    break;
-                                }
-                            }
-                            else
-                            {
-                                var rows = await ReadTotalAsync(page, title);
-                                foreach (var (side, line, odds) in rows)
-                                    sels.Add(new Selection(site.Market, side, line, odds, $"{m.url}|{title}|{side}|{line.ToString(CultureInfo.InvariantCulture)}",
-                                        choice.IntervalKey, $"{title}: {side} ({line.ToString(CultureInfo.InvariantCulture)})"));
-                                if (rows.Count > 0) break;
-                            }
+                            await OpenTabAsync(page, tab);
+                            if (await ReadIntervalAsync(page, m.url, site, choice, to, sels)) break;
                         }
                     }
                     if (sels.Any(x => x.Market == choice.Market && x.Side == choice.Side && x.Interval == choice.IntervalKey
@@ -279,6 +265,56 @@ public sealed class LeonbetClient(
         var time = TimeSpan.ParseExact(lines[t], @"hh\:mm", CultureInfo.InvariantCulture);
         var utc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(date + time, DateTimeKind.Unspecified), Eat.Zone);
         return (lines[t + 1], lines[t + 2], utc);
+    }
+
+    /// <summary>
+    /// Reads the first of the market's interval blocks found on the open tab into <paramref name="sels"/>:
+    /// "{to} Minute Result" → X (draw); "Total After {to} Minutes" → Over/Under rows; a Yes/No block such as
+    /// "Goal Scored In The First {to} Minutes" → its "No" as Under 0.5 (nothing happens in the interval). False if none is there.
+    /// </summary>
+    private async Task<bool> ReadIntervalAsync(IPage page, string url, LeonbetMarket site, MarketChoice choice, string to, List<Selection> sels)
+    {
+        foreach (var template in site.IntervalTitles)
+        {
+            var title = template.Replace("{to}", to);
+            if (site.Market == "result")
+            {
+                if (await ReadDrawAsync(page, title) is not { } drawOdds) continue;
+                sels.Add(new Selection("result", "Draw", 0, drawOdds, $"{url}|{title}|X", choice.IntervalKey, $"{title}: X (draw)"));
+                return true;
+            }
+            if (!await IsVisible(page.Locator($"text=/{PageText.TitlePattern(title)}/i >> visible=true").First, 5_000)) continue;
+            // A Yes/No block first: the Over/Under reader climbs from the title and could reach a neighbouring block's rows.
+            switch (await ReadNoAsync(page, title))
+            {
+                case (true, { } noOdds):
+                    sels.Add(new Selection(site.Market, "Under", 0.5m, noOdds, $"{url}|{title}|No", choice.IntervalKey, $"{title}: No"));
+                    return true;
+                case (true, null):
+                    continue; // a Yes/No block with "No" suspended: nothing to bet here
+            }
+            var rows = await ReadTotalAsync(page, title);
+            foreach (var (side, line, odds) in rows)
+                sels.Add(new Selection(site.Market, side, line, odds, $"{url}|{title}|{side}|{line.ToString(CultureInfo.InvariantCulture)}",
+                    choice.IntervalKey, $"{title}: {side} ({line.ToString(CultureInfo.InvariantCulture)})"));
+            if (rows.Count > 0) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the visible block titled exactly <paramref name="title"/> is a Yes/No block, and the odds of its "No" button
+    /// (null when it is suspended or unreadable).
+    /// </summary>
+    private async Task<(bool yesNo, decimal? noOdds)> ReadNoAsync(IPage page, string title)
+    {
+        var titleEl = page.Locator($"text=/{PageText.TitlePattern(title)}/i >> visible=true").First;
+        if (!await IsVisible(titleEl, 1_000)) return (false, null);
+        var runners = await titleEl.EvaluateAsync<string[][]>(RunnersScript, -1);
+        var no = runners.FirstOrDefault(r => r[0].Trim().Equals("No", StringComparison.OrdinalIgnoreCase));
+        if (no is null) return (false, null);
+        if (no[2] == "true") { log.LogInformation("Leonbet: 'No' in '{Title}' is suspended", title); return (true, null); }
+        return (true, decimal.TryParse(no[1].Replace(',', '.'), NumberStyles.Number, CultureInfo.InvariantCulture, out var odds) ? odds : null);
     }
 
     /// <summary>Over/Under rows ("Under (6.5)" + odds) of the visible block titled exactly <paramref name="title"/>.</summary>
@@ -432,18 +468,21 @@ public sealed class LeonbetClient(
     /// <summary>Opens the pick's match, finds its odds button in the block named in the selection Ref, checks the odds and clicks it.</summary>
     private async Task AddPickAsync(IPage page, Pick pick)
     {
-        // Ref = match url | block title | side | line, or match url | block title | X (see GetMatchesAsync).
+        // Ref = match url | block title | side | line, or match url | block title | X (draw) or No (Yes/No block)
+        // (see GetMatchesAsync).
         var parts = pick.Selection.Ref.Split('|');
         var teams = $"{pick.Match.Home} v {pick.Match.Away}";
-        var want = parts.Length == 3 && parts[2] == "X"
-            ? new Regex(@"^\s*X\s*$")
+        var want = parts.Length == 3
+            ? new Regex($@"^\s*{Regex.Escape(parts[2])}\s*$", RegexOptions.IgnoreCase)
             : new Regex($@"^\s*{Regex.Escape(parts[2])}\s*\(\s*{Regex.Escape(parts[3]).Replace(@"\.", @"[.,]")}\s*\)\s*$", RegexOptions.IgnoreCase);
 
         await page.OpenAsync(parts[0], log);
         await page.WaitForTimeoutAsync(3_000);
         await OpenTabAsync(page, pick.Selection.Interval is null ? o.AllMarketsTab : o.IntervalsTab);
         var titleEl = page.Locator($"text=/{PageText.TitlePattern(parts[1])}/i >> visible=true").First;
-        if (!await IsVisible(titleEl, 8_000)) throw new InvalidOperationException($"'{parts[1]}' is no longer offered for {teams}.");
+        if (!await IsVisible(titleEl, 8_000) && pick.Selection.Interval is not null)
+            await OpenTabAsync(page, o.AllMarketsTab); // some interval blocks are listed under "All markets"
+        if (!await IsVisible(titleEl, 5_000)) throw new InvalidOperationException($"'{parts[1]}' is no longer offered for {teams}.");
 
         var runners = await titleEl.EvaluateAsync<string[][]>(RunnersScript, -1);
         int i = Array.FindIndex(runners, r => want.IsMatch(r[0]));
