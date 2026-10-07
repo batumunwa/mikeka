@@ -92,33 +92,25 @@ public class BettingEngine(
                 return await Done(account, "Stopped", $"{account.LossStreak} consecutive losses. Betting stopped.");
         }
 
-        // 2) Matches from the public pages (no login), league by league in the account's order: the 1st league alone first;
-        //    only if it can't make a slip is the next league read and added, and so on. Within that, from now: today first,
-        //    then the following days in a row.
+        // 2) Matches from the public pages (no login), all the account's leagues together, earliest day first: today's
+        //    matches alone; if they can't make a slip, today + tomorrow; and so on up to MaxDaysAhead days. So an earlier
+        //    match in any league is always used before a later one (e.g. Bundesliga on Friday before EPL on Saturday).
         var stake = StakeCalculator.NextStake(account);
         var endOfToday = TimeZoneInfo.ConvertTimeToUtc(today.AddDays(1).ToDateTime(TimeOnly.MinValue), Eat.Zone);
         var accountRules = _rules.ForAccount(account);
-        var matches = new List<MatchInfo>();
-        var read = new List<string>();
-        SlipPlan? plan = null;
-        foreach (var league in account.Leagues)
-        {
-            ct.ThrowIfCancellationRequested();
-            var found = await client.GetMatchesAsync([league], account.Markets, endOfToday.AddDays(_rules.MaxDaysAhead - 1), ct);
-            matches.AddRange(SlipBuilder.InLeagues(found, [league]).Where(m => m.Kickoff > clock.GetUtcNow().UtcDateTime));
-            read.Add(league);
-            for (int d = 0; d < _rules.MaxDaysAhead && plan is null; d++)
-                plan = SlipBuilder.Build(matches.Where(m => m.Kickoff < endOfToday.AddDays(d)), accountRules);
-            if (plan is not null)
-            {
-                await Log(account, $"Slip found with {string.Join(", ", read)}" +
-                                   (read.Count < account.Leagues.Count ? "; the other leagues were not needed." : "."));
-                break;
-            }
-        }
+        var matches = await client.GetMatchesAsync(account.Leagues, account.Markets, endOfToday.AddDays(_rules.MaxDaysAhead - 1), ct);
+        matches = SlipBuilder.InLeagues(matches, account.Leagues).Where(m => m.Kickoff > clock.GetUtcNow().UtcDateTime).ToList();
         if (!matches.Any(m => m.Selections.Any(x => accountRules.Markets.Any(c => c.Market == x.Market && c.Side == x.Side))))
             return await Done(account, "NoMatches",
                 $"No matches offering {Describe(account)} in {string.Join(", ", account.Leagues)} in the next {_rules.MaxDaysAhead} days. Next check in {_rules.CheckIntervalMinutes} min.");
+
+        SlipPlan? plan = null;
+        for (int d = 0; d < _rules.MaxDaysAhead && plan is null; d++)
+        {
+            plan = SlipBuilder.Build(matches.Where(m => m.Kickoff < endOfToday.AddDays(d)), accountRules);
+            if (plan is not null)
+                await Log(account, d == 0 ? "Slip built from today's matches." : $"Today's matches were not enough; slip built with matches up to {today.AddDays(d):dd/MM}.");
+        }
         if (plan is null)
             return await Done(account, "NoSlip",
                 $"No combination of up to {_rules.MaxMatches} picks at {accountRules.MinPickOdds}–{accountRules.MaxPickOdds} reaches " +
