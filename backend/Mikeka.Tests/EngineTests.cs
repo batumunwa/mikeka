@@ -255,7 +255,7 @@ public class EngineTests : IDisposable
             return Task.FromResult($"BET{Placed}");
         }
 
-        public Task<BetOutcome> GetOutcomeAsync(string betReference, CancellationToken ct) => Task.FromResult(NextOutcome);
+        public Task<BetOutcome> GetOutcomeAsync(Slip slip, CancellationToken ct) => Task.FromResult(NextOutcome);
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

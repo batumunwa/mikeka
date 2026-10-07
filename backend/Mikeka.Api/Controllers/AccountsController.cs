@@ -9,7 +9,8 @@ namespace Mikeka.Api.Controllers;
 
 public record AccountDto(int Id, string Name, string Url, string Site, string Username, string Currency, bool IsActive,
     List<string> Leagues, List<MarketChoice> Markets, int LossStreak, bool Stopped, decimal? LastBalance, decimal NextStake, decimal BaseStake,
-    int MaxLosses, decimal MinPickOdds, decimal MaxPickOdds, decimal MinCombinedOdds, decimal MaxCombinedOdds);
+    int MaxLosses, decimal MinPickOdds, decimal MaxPickOdds, decimal MinCombinedOdds, decimal MaxCombinedOdds,
+    DateTime? NextCheckAt);
 
 public record SaveAccountRequest(
     [Required] string Name,
@@ -35,7 +36,7 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
 {
     private AccountDto ToDto(Account a) => new(a.Id, a.Name, a.Url, a.Site, a.Username, a.Currency, a.IsActive,
         a.Leagues, a.Markets, a.LossStreak, a.Stopped, a.LastBalance, StakeCalculator.NextStake(a), a.BaseStake,
-        a.MaxLosses, a.MinPickOdds, a.MaxPickOdds, a.MinCombinedOdds, a.MaxCombinedOdds);
+        a.MaxLosses, a.MinPickOdds, a.MaxPickOdds, a.MinCombinedOdds, a.MaxCombinedOdds, a.NextCheckAt);
 
     [HttpGet]
     public async Task<IEnumerable<AccountDto>> List() =>
@@ -60,6 +61,9 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
         var leagues = markets.SelectMany(m => m.Leagues).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (await db.Accounts.AnyAsync(a => a.Url == req.Url && a.Username == req.Username))
             return Conflict("This username is already registered for that site.");
+        // First check: now + check interval + the delay for each account already on this company.
+        var sameSite = await db.Accounts.CountAsync(x => x.IsActive && x.Site == site);
+        var firstCheck = DateTime.UtcNow.AddMinutes(r.CheckIntervalMinutes + sameSite * r.SameSiteDelayMinutes);
         var a = new Account
         {
             Name = req.Name, Url = req.Url, Username = req.Username, Currency = req.Currency, IsActive = req.IsActive,
@@ -67,6 +71,7 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
             Markets = markets,
             BaseStake = req.BaseStake ?? rules.Value.BaseStake,
             MaxLosses = maxLosses,
+            NextCheckAt = firstCheck,
             MinPickOdds = odds.Item1, MaxPickOdds = odds.Item2, MinCombinedOdds = odds.Item3, MaxCombinedOdds = odds.Item4,
             Site = site,
             PasswordProtected = secrets.Protect(req.Password),
@@ -184,7 +189,7 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
         }
     }
 
-    /// <summary>Read-only: logs in, reads the account's leagues and their cards/corners odds, logs out. Never touches the bet slip.</summary>
+    /// <summary>Read-only, no login (public pages): the account's leagues and their odds. Never touches the bet slip.</summary>
     [HttpPost("{id:int}/matches")]
     public async Task<IActionResult> Matches(int id, [FromServices] Bookmaker.IBookmakerFactory bookmakers, [FromServices] TimeProvider clock, CancellationToken ct)
     {
@@ -193,7 +198,6 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
         try
         {
             await using var client = await bookmakers.CreateAsync(a, secrets.Unprotect(a.PasswordProtected), ct);
-            await client.LoginAsync(ct);
             var until = clock.GetUtcNow().UtcDateTime.AddDays(rules.Value.MaxDaysAhead);
             var matches = await client.GetMatchesAsync(a.Leagues, a.Markets, until, ct);
             var accountRules = rules.Value.ForAccount(a);

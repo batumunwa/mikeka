@@ -74,6 +74,8 @@ export interface Account {
   maxPickOdds: number
   minCombinedOdds: number
   maxCombinedOdds: number
+  /** When the system next checks this account (UTC ISO); null = as soon as possible. */
+  nextCheckAt: string | null
 }
 
 export interface SaveAccount {
@@ -125,6 +127,9 @@ export interface Slip {
   balanceBefore: number | null
   balanceAfter: number | null
   note: string | null
+  /** When the system reads the slip's result (UTC ISO): after a gap between match ends, and at the last end. */
+  settlementChecks: string[]
+  resultCheckedAt: string | null
   picks: Pick[]
 }
 
@@ -199,6 +204,16 @@ export interface Settings {
   maxLosses: number
   /** Matches with these teams are never picked (all accounts). */
   excludedTeams: string[]
+  /** Each account is checked again this long after its last check. */
+  checkIntervalMinutes: number
+  /** On one company, the next account starts this long after the previous one finished. */
+  sameSiteDelayMinutes: number
+  /** A match is assumed over this long after kickoff. */
+  matchMinutes: number
+  /** Match ends further apart than this get separate result checks. */
+  settlementGapMinutes: number
+  /** Matches are looked for over this many days from now. */
+  maxDaysAhead: number
 }
 
 export interface RunResult {

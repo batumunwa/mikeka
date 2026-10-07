@@ -32,13 +32,12 @@ public class SlipAnalysis(
     /// <summary>The last proposed slip per account, kept so "Create slip" saves exactly what was shown.</summary>
     private static readonly ConcurrentDictionary<int, (SlipPlan plan, DateTime fromEat, DateTime toEat, decimal stake)> LastPlans = new();
 
-    /// <summary>Default window: the most recent WindowStart (EAT) to 24 hours later minus one minute.</summary>
+    /// <summary>Default window: from now (EAT) over the days the automatic checks look ahead (Settings).</summary>
     public (DateTime fromEat, DateTime toEat) DefaultWindow()
     {
         var now = Eat.Now(clock);
-        var start = now.Date + _rules.WindowStart.ToTimeSpan();
-        if (now < start) start = start.AddDays(-1);
-        return (start, start.AddDays(1).AddMinutes(-1));
+        var start = now.Date.AddHours(now.Hour).AddMinutes(now.Minute);
+        return (start, now.Date.AddDays(_rules.MaxDaysAhead).AddMinutes(-1));
     }
 
     public async Task<AnalysisReport> AnalyseAsync(int accountId, DateTime fromEat, DateTime toEat, CancellationToken ct)
@@ -135,42 +134,6 @@ public class SlipAnalysis(
         LastPlans.TryRemove(accountId, out _); // one draft per analysis
         await excel.WriteFileAsync(ct);
         return slip;
-    }
-
-    /// <summary>Today's window: today WindowStart (EAT) to 24 hours later minus one minute (e.g. 10:00 → 09:59).</summary>
-    public (DateTime fromEat, DateTime toEat) TodaysWindow()
-    {
-        var start = Eat.Now(clock).Date + _rules.WindowStart.ToTimeSpan();
-        return (start, start.AddDays(1).AddMinutes(-1));
-    }
-
-    /// <summary>
-    /// Daily automatic selection for accounts whose bets are placed by hand: analyse today's window on the public site,
-    /// save the slip as a Draft and email it. Does nothing if today's slip already exists.
-    /// </summary>
-    public async Task<string> DailySelectionAsync(int accountId, INotifier notifier, CancellationToken ct)
-    {
-        var account = await db.Accounts.FindAsync([accountId], ct) ?? throw new KeyNotFoundException("Account not found.");
-        if (!account.IsActive || account.Stopped) return "Account inactive or stopped.";
-        // Coldbet totals come from the site's odds data; only its interval markets are still read from screenshots.
-        if (account.Site == "coldbet" && account.Markets.Any(m => m.IntervalKey is not null) && !screenshotReader.Configured)
-            return "Coldbet interval odds are read from screenshots: set Anthropic:ApiKey in appsettings.Development.json.";
-        var (fromEat, toEat) = TodaysWindow();
-        var day = DateOnly.FromDateTime(fromEat);
-        if (await db.Slips.AnyAsync(s => s.AccountId == accountId && s.BetDay == day && s.Status != SlipStatus.Skipped, ct))
-            return "Today's slip is already prepared.";
-
-        var report = await AnalyseAsync(accountId, fromEat, toEat, ct);
-        if (!report.CanCreateSlip) return report.Verdict;
-
-        var slip = await CreateDraftAsync(accountId, ct);
-        var lines = slip.Picks.OrderBy(p => p.Kickoff).Select((p, i) =>
-            $"{i + 1}. {TimeZoneInfo.ConvertTimeFromUtc(p.Kickoff, Eat.Zone):dd/MM HH:mm}  {p.Home} v {p.Away} ({p.League})\n" +
-            $"   {MarketName(p.Market)} {(p.Interval is null ? $"{p.Side} {p.Line}" : $"{p.Side} {p.Line} in minutes {p.Interval}")} @ {p.Odds:0.00}");
-        await notifier.SendAsync($"Slip ready for {account.Name}: {slip.Picks.Count} picks at {slip.CombinedOdds:0.00}",
-            $"Draft slip #{slip.Id} for {fromEat:dd/MM HH:mm}–{toEat:dd/MM HH:mm} EAT.\n\n{string.Join("\n", lines)}\n\n" +
-            $"Combined odds about {slip.CombinedOdds:0.00}. Stake {slip.Stake:N0} {account.Currency}.", ct);
-        return $"Draft slip #{slip.Id} created and emailed.";
     }
 
     private static string MarketName(string m) => m switch

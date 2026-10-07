@@ -16,7 +16,7 @@ public class SlipsController(MikekaDb db, ExcelLog excel) : ControllerBase
             .Select(s => new
             {
                 s.Id, s.AccountId, s.BetDay, s.CreatedAt, s.SettledAt, Status = s.Status.ToString(), s.Stake,
-                s.CombinedOdds, s.PotentialReturn, s.BetReference, s.BalanceBefore, s.BalanceAfter, s.Note,
+                s.CombinedOdds, s.PotentialReturn, s.BetReference, s.BalanceBefore, s.BalanceAfter, s.Note, s.SettlementChecks, s.ResultCheckedAt,
                 Picks = s.Picks.OrderBy(p => p.Kickoff).Select(p => new { p.League, p.Home, p.Away, p.Kickoff, p.Market, p.Side, p.Line, p.Odds, p.Interval, p.Label }),
             })
             .ToListAsync());

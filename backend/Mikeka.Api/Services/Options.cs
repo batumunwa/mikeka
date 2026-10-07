@@ -22,13 +22,17 @@ public class BettingRules
     public int AlertAfterLosses => StopAfterLosses - 1;
     /// <summary>Teams never bet on (Settings page, all accounts).</summary>
     public List<string> ExcludedTeams { get; set; } = [];
-    /// <summary>Spread matches over up to this many days when today cannot reach the odds.</summary>
-    public int MaxDaysAhead { get; set; } = 3;
-    /// <summary>Daily generation time in East Africa Time.</summary>
-    public TimeOnly RunAt { get; set; } = new(8, 0);
-    /// <summary>A betting window runs 24 hours from this time (EAT), e.g. 10:00 today to 09:59 tomorrow.</summary>
-    public TimeOnly WindowStart { get; set; } = new(10, 0);
-    public int TickMinutes { get; set; } = 30;
+    // Timing (Settings page, copied here by SettingsService).
+    /// <summary>Matches are looked for from now over up to this many consecutive days (today first).</summary>
+    public int MaxDaysAhead { get; set; } = 7;
+    /// <summary>Each account is checked again this long after its last check.</summary>
+    public int CheckIntervalMinutes { get; set; } = 60;
+    /// <summary>On one betting company, the next account is checked this long after the previous one finished.</summary>
+    public int SameSiteDelayMinutes { get; set; } = 5;
+    /// <summary>A match is assumed over this long after kickoff.</summary>
+    public int MatchMinutes { get; set; } = 180;
+    /// <summary>Two match ends further apart than this get separate result checks.</summary>
+    public int SettlementGapMinutes { get; set; } = 60;
     /// <summary>"Coldbet" for the real site, "Mock" for testing without the site.</summary>
     public string Bookmaker { get; set; } = "Mock";
     /// <summary>When true, builds and logs slips but never clicks "place bet".</summary>
@@ -38,6 +42,21 @@ public class BettingRules
     /// true = the system clicks "Place" itself (Coldbet only).
     /// </summary>
     public bool PlaceBets { get; set; } = false;
+
+    /// <summary>
+    /// When to read a slip's result (UTC). Each match ends at kickoff + MatchMinutes. Going through the ends in order, an end
+    /// becomes a check time when the next match ends more than SettlementGapMinutes later; the last end always is one.
+    /// E.g. ends 17:00, 17:30, 20:00 with a 60-minute gap → checks at 17:30 and 20:00.
+    /// </summary>
+    public List<DateTime> SettlementChecks(IEnumerable<DateTime> kickoffsUtc)
+    {
+        var ends = kickoffsUtc.Select(k => k.AddMinutes(MatchMinutes)).Order().ToList();
+        var checks = new List<DateTime>();
+        for (int i = 0; i < ends.Count; i++)
+            if (i == ends.Count - 1 || ends[i + 1] - ends[i] > TimeSpan.FromMinutes(SettlementGapMinutes))
+                checks.Add(ends[i]);
+        return checks;
+    }
 
     /// <summary>A copy of these rules limited to one market row (used to explain decisions).</summary>
     public BettingRules WithOnly(Domain.MarketChoice choice)

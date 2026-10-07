@@ -46,7 +46,7 @@ else
     builder.Services.AddSingleton<IBookmakerFactory, SiteBookmakerFactory>();
 
 if (builder.Configuration.GetValue("Betting:SchedulerEnabled", true))
-    builder.Services.AddHostedService<DailyScheduler>();
+    builder.Services.AddHostedService<CheckScheduler>();
 
 var app = builder.Build();
 

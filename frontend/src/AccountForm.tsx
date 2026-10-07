@@ -293,7 +293,7 @@ export function AccountForm({ settings, account, onSaved, onCancel }: Props) {
         </label>
         <label className="check">
           <input type="checkbox" checked={form.isActive} onChange={(e) => set('isActive', e.target.checked)} />
-          Active (included in the 08:00 EAT run)
+          Active (checked automatically)
         </label>
       </div>
       <p className="muted small">The password is encrypted before it is stored and is never shown again.</p>

@@ -101,7 +101,7 @@ export default function App() {
           </span>
           <div>
             <h1>Mikeka</h1>
-            <p>Daily under-slips across your betting accounts</p>
+            <p>Under-slips across your betting accounts, checked around the clock</p>
           </div>
         </div>
         <div className="actions">
@@ -114,7 +114,7 @@ export default function App() {
               {settings.excludedTeams.length} excluded team{settings.excludedTeams.length === 1 ? '' : 's'}
             </span>
           )}
-          <span className="chip">Daily 08:00 EAT</span>
+          {settings && <span className="chip">Checks every {settings.checkIntervalMinutes} min · {settings.maxDaysAhead} days ahead</span>}
           {settings && <span className="chip mode">{settings.dryRun ? 'Run now: dry run' : settings.placeBets ? 'Runs place bets automatically' : 'Run now fills the bet slip · you place it'}</span>}
         </div>
       </div>
@@ -191,6 +191,9 @@ export default function App() {
             </div>
             <div className="limits-line muted small">
               Picks {range(a.minPickOdds, a.maxPickOdds)} · Combined {range(a.minCombinedOdds, a.maxCombinedOdds)} · stops after {a.maxLosses} losses
+              {a.isActive && !a.stopped && (
+                <div>Next check: {!a.nextCheckAt || new Date(a.nextCheckAt) <= new Date() ? 'due now' : `${eat(a.nextCheckAt)} EAT`}</div>
+              )}
             </div>
             {placed && (
               <div className="placed-today" title={placed.betReference ? `Bet number ${placed.betReference}` : undefined}>
@@ -243,11 +246,11 @@ export default function App() {
                   const siteName = SITE_NAMES[a.site] ?? a.site
                   if (settings && !settings.dryRun && !(await confirm(settings.placeBets ? {
                     title: `Place a bet on ${siteName}?`, icon: '▶', tone: 'danger', confirmLabel: 'Place bet',
-                    message: <>The system finds today's matches, fills the slip, types the stake and <b>clicks Place</b>: real money is bet without another check.</>,
+                    message: <>The system reads the open slip's result if there is one, then finds matches from now on, fills the slip, types the stake and <b>clicks Place</b>: real money is bet without another check.</>,
                     facts: [['Account', a.name], ['Stake', money(a.nextStake, a.currency)], ['Site', siteName]],
                   } : {
                     title: `Fill the ${siteName} bet slip?`, icon: '▶', confirmLabel: 'Fill bet slip',
-                    message: <>The system finds today's matches, clicks the odds into the slip and types the stake. It never clicks <b>Place</b>: you check the slip and place it yourself.</>,
+                    message: <>The system reads the open slip's result if there is one, then finds matches from now on, clicks the odds into the slip and types the stake. It never clicks <b>Place</b>: you check the slip and place it yourself.</>,
                     facts: [['Account', a.name], ['Stake', money(a.nextStake, a.currency)], ['Site', siteName]],
                   }))) return
                   act(a.id, () => api.run(a.id), (r) => {

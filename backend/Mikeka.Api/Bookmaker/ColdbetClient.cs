@@ -624,8 +624,9 @@ public sealed class ColdbetClient(
         return null;
     }
 
-    public async Task<BetOutcome> GetOutcomeAsync(string betReference, CancellationToken ct)
+    public async Task<BetOutcome> GetOutcomeAsync(Slip slip, CancellationToken ct)
     {
+        var betReference = slip.BetReference ?? "";
         var page = await Page();
         await page.OpenAsync(At(o.HistoryPath), log, WaitUntilState.NetworkIdle);
         var row = page.Locator(o.HistoryRow).Filter(new() { HasText = betReference }).First;

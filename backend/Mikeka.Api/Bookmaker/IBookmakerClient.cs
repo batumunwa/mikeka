@@ -20,7 +20,8 @@ public interface IBookmakerClient : IAsyncDisposable
     /// Returns true when the stake was typed into the site's stake box too (false: the user types it).
     /// </summary>
     Task<bool> FillSlipAsync(IReadOnlyList<Pick> picks, decimal stake, CancellationToken ct);
-    Task<BetOutcome> GetOutcomeAsync(string betReference, CancellationToken ct);
+    /// <summary>The slip's result on the site (logged in). Pending also when the bet is not found.</summary>
+    Task<BetOutcome> GetOutcomeAsync(Slip slip, CancellationToken ct);
 }
 
 /// <summary>

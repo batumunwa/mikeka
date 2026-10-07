@@ -25,95 +25,108 @@ public class BettingEngine(
 {
     private readonly BettingRules _rules = rulesOptions.Value;
 
-    /// <param name="manual">Manual "Run now" retries a day that was skipped (e.g. after you top up the balance).</param>
+    /// <summary>One run per account at a time (scheduler and "Run now" never overlap, so a slip is never placed twice).</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, SemaphoreSlim> Running = new();
+
+    /// <param name="manual">"Run now": reads the open slip's result now instead of waiting for its next check time.</param>
     public async Task<RunResult> RunAsync(int accountId, bool manual, CancellationToken ct)
+    {
+        var gate = Running.GetOrAdd(accountId, _ => new SemaphoreSlim(1, 1));
+        if (!await gate.WaitAsync(0, ct)) return new RunResult(accountId, "Busy", "A run for this account is already in progress.");
+        try { return await RunLockedAsync(accountId, manual, ct); }
+        finally { gate.Release(); }
+    }
+
+    private async Task<RunResult> RunLockedAsync(int accountId, bool manual, CancellationToken ct)
     {
         var account = await db.Accounts.SingleAsync(a => a.Id == accountId, ct);
         var today = Eat.Today(clock);
+        var nowUtc = clock.GetUtcNow().UtcDateTime;
+        // Default: look again after the check interval. Waiting for a slip's result moves this to its next check time.
+        account.NextCheckAt = nowUtc.AddMinutes(_rules.CheckIntervalMinutes);
 
         if (!account.IsActive) return await Done(account, "Inactive", "Account is disabled.");
         if (account.Stopped)
             return await Done(account, "Stopped", $"Stopped after {account.LossStreak} consecutive losses. Reset the account to resume.");
 
-        var pending = await db.Slips.Where(s => s.AccountId == accountId && s.Status == SlipStatus.Pending)
+        var pending = await db.Slips.Include(s => s.Picks).Where(s => s.AccountId == accountId && s.Status == SlipStatus.Pending)
             .OrderBy(s => s.CreatedAt).ToListAsync(ct);
-        var todays = await db.Slips.Where(s => s.AccountId == accountId && s.BetDay == today).ToListAsync(ct);
-        bool alreadyBetToday = todays.Any(s => s.Status is SlipStatus.Pending or SlipStatus.Won or SlipStatus.Lost); // drafts are not bets
-        // A "no bet" day is a "Skipped: …" activity-log line (no slip); a dry-run slip also counts as today handled.
-        var todayStartUtc = TimeZoneInfo.ConvertTimeToUtc(today.ToDateTime(TimeOnly.MinValue), Eat.Zone);
-        bool skippedToday = todays.Any(s => s.Status == SlipStatus.Skipped)
-            || await db.RunLogs.AnyAsync(l => l.AccountId == accountId && l.At >= todayStartUtc && l.Message.StartsWith("Skipped:"), ct);
 
-        // Nothing to do without touching the site: today's slip is in and nothing waits for a result.
-        if (pending.Count == 0 && (alreadyBetToday || (skippedToday && !manual)))
-            return new RunResult(accountId, "Done", "Today's slip is already handled.");
-
-        // A slip sent to the site without a bet number can't be checked automatically, and betting again could double it.
+        // A slip sent to the site without a bet number (or filled for the user) can't be checked: betting again could double it.
         if (pending.FirstOrDefault(s => string.IsNullOrEmpty(s.BetReference)) is { } unconfirmed)
             return await Done(account, "Waiting",
                 $"Slip #{unconfirmed.Id} ({unconfirmed.BetDay}) was sent to {account.Site} without a bet number. " +
                 "Check 'My bets' on the site, then mark it Won or Lost in the dashboard (or delete it if it was never placed).");
         if (!_rules.DryRun && !new[] { "coldbet", "leonbet", "1win" }.Contains(account.Site, StringComparer.OrdinalIgnoreCase))
             return await Done(account, "NotSupported", $"Filling and placing bets is built for Coldbet, Leonbet and 1win only; {account.Site} slips are entered by hand.");
-        // Only Coldbet's bet history is read by the system; a placed Leonbet/1win slip waits for the user to mark it.
-        if (pending.FirstOrDefault() is { } open && !account.Site.Equals("coldbet", StringComparison.OrdinalIgnoreCase))
-            return await Done(account, "Waiting",
-                $"Slip #{open.Id} ({open.BetDay}) is placed on {account.Site}; the system cannot read {account.Site} results yet. " +
-                "Mark it Won or Lost here once its matches are over.");
+
+        // 1) An open slip: read its result at its check times (see BettingRules.SettlementChecks). Nothing due = wait, no login.
+        if (pending.Count > 0 && !manual)
+        {
+            var due = pending.Where(ResultDue).ToList();
+            if (due.Count == 0)
+            {
+                var next = pending.Select(NextResultCheck).Min();
+                account.NextCheckAt = next;
+                return await Done(account, "Waiting",
+                    $"Slip #{pending[0].Id} is open; its result is read at {EatTime(next):dd/MM HH:mm} EAT.");
+            }
+        }
 
         await using var client = await bookmakers.CreateAsync(account, secrets.Unprotect(account.PasswordProtected), ct);
-        await client.LoginAsync(ct);
+        var loggedIn = false;
 
-        // 1) Settle earlier slips. If any is still being played, wait: the stake depends on its result.
         foreach (var slip in pending)
         {
-            var outcome = await client.GetOutcomeAsync(slip.BetReference!, ct);
+            if (!loggedIn) { await client.LoginAsync(ct); loggedIn = true; }
+            var outcome = await client.GetOutcomeAsync(slip, ct);
+            slip.ResultCheckedAt = clock.GetUtcNow().UtcDateTime;
             if (outcome == BetOutcome.Pending)
-                return await Done(account, "Waiting", $"Slip #{slip.Id} ({slip.BetDay}) is not settled yet; will check again.");
+            {
+                account.NextCheckAt = NextResultCheck(slip);
+                return await Done(account, "Waiting",
+                    $"Slip #{slip.Id} is not settled on {account.Site} yet (not lost either); next result check {EatTime(account.NextCheckAt.Value):dd/MM HH:mm} EAT.");
+            }
             await SettleAsync(account, slip, outcome == BetOutcome.Won, await client.GetBalanceAsync(ct), ct);
             if (account.Stopped)
                 return await Done(account, "Stopped", $"{account.LossStreak} consecutive losses. Betting stopped.");
         }
 
-        if (alreadyBetToday) return await Done(account, "Done", "Today's slip is already placed.");
-        if (TimeOnly.FromDateTime(Eat.Now(clock)) < _rules.RunAt && !manual)
-            return await Done(account, "Early", $"Slips are generated from {_rules.RunAt:HH:mm} EAT.");
-        if (skippedToday && !manual) return await Done(account, "Done", "Today was skipped; use Run now to retry.");
+        // 2) Matches from the public pages (no login): from now, today first, then the following days in a row.
+        var stake = StakeCalculator.NextStake(account);
+        var endOfToday = TimeZoneInfo.ConvertTimeToUtc(today.AddDays(1).ToDateTime(TimeOnly.MinValue), Eat.Zone);
+        var accountRules = _rules.ForAccount(account);
+        var matches = await client.GetMatchesAsync(account.Leagues, account.Markets, endOfToday.AddDays(_rules.MaxDaysAhead - 1), ct);
+        matches = SlipBuilder.InLeagues(matches, account.Leagues).Where(m => m.Kickoff > clock.GetUtcNow().UtcDateTime).ToList();
+        if (!matches.Any(m => m.Selections.Any(x => accountRules.Markets.Any(c => c.Market == x.Market && c.Side == x.Side))))
+            return await Done(account, "NoMatches",
+                $"No matches offering {Describe(account)} in {string.Join(", ", account.Leagues)} in the next {_rules.MaxDaysAhead} days. Next check in {_rules.CheckIntervalMinutes} min.");
 
-        // 2) Balance and stake.
+        SlipPlan? plan = null;
+        for (int d = 0; d < _rules.MaxDaysAhead && plan is null; d++)
+            plan = SlipBuilder.Build(matches.Where(m => m.Kickoff < endOfToday.AddDays(d)), accountRules);
+        if (plan is null)
+            return await Done(account, "NoSlip",
+                $"No combination of up to {_rules.MaxMatches} picks at {accountRules.MinPickOdds}–{accountRules.MaxPickOdds} reaches " +
+                $"{accountRules.MinCombinedOdds}–{accountRules.MaxCombinedOdds} within {_rules.MaxDaysAhead} days. Next check in {_rules.CheckIntervalMinutes} min.");
+
+        // Last guard: never send two selections of one match to a site (sites refuse them in one accumulator).
+        if (plan.Picks.GroupBy(p => SlipBuilder.MatchKey(p.Match)).FirstOrDefault(g => g.Count() > 1) is { } twice)
+            return await Done(account, "NotFilled", $"The slip has {twice.First().Match.Home} v {twice.First().Match.Away} twice; nothing was sent to {account.Site}.");
+
+        // 3) A slip is possible: log in only now, for the balance and the bet.
+        if (!loggedIn) { await client.LoginAsync(ct); loggedIn = true; }
         var balance = await client.GetBalanceAsync(ct);
         account.LastBalance = balance;
-        var stake = StakeCalculator.NextStake(account);
         if (balance <= 0)
             return await Skip(account, today, stake, balance, "Balance is zero. No bet.", ct);
         if (balance < stake)
         {
             await notifier.SendAsync($"Please top up {account.Username}",
                 $"Account {account.Username} has {balance:N0} {account.Currency} but the next slip needs {stake:N0} {account.Currency} " +
-                $"(loss streak {account.LossStreak}). Please update the balance; then press \"Run now\" in the dashboard.", ct);
+                $"(loss streak {account.LossStreak}). Please update the balance; the system tries again every {_rules.CheckIntervalMinutes} minutes.", ct);
             return await Skip(account, today, stake, balance, $"Balance {balance:N0} is less than stake {stake:N0}. Top-up requested by email.", ct);
         }
-
-        // 3) Matches: today first; widen day by day until the combined odds fit.
-        var nowUtc = clock.GetUtcNow().UtcDateTime;
-        var endOfToday = TimeZoneInfo.ConvertTimeToUtc(today.AddDays(1).ToDateTime(TimeOnly.MinValue), Eat.Zone);
-        var accountRules = _rules.ForAccount(account);
-        var matches = await client.GetMatchesAsync(account.Leagues, account.Markets, endOfToday.AddDays(_rules.MaxDaysAhead - 1), ct);
-        matches = SlipBuilder.InLeagues(matches, account.Leagues).Where(m => m.Kickoff > nowUtc).ToList();
-        if (!matches.Any(m => m.Selections.Any(x => accountRules.Markets.Any(c => c.Market == x.Market && c.Side == x.Side))))
-            return await Skip(account, today, stake, balance,
-                $"No matches offering {Describe(account)} in {string.Join(", ", account.Leagues)}. No bet.", ct);
-
-        SlipPlan? plan = null;
-        for (int d = 0; d < _rules.MaxDaysAhead && plan is null; d++)
-            plan = SlipBuilder.Build(matches.Where(m => m.Kickoff < endOfToday.AddDays(d)), accountRules);
-        if (plan is null)
-            return await Skip(account, today, stake, balance,
-                $"No combination of up to {_rules.MaxMatches} picks at {accountRules.MinPickOdds}–{accountRules.MaxPickOdds} reaches {accountRules.MinCombinedOdds}–{accountRules.MaxCombinedOdds}. No bet.", ct);
-
-        // Last guard: never send two selections of one match to a site (sites refuse them in one accumulator).
-        if (plan.Picks.GroupBy(p => SlipBuilder.MatchKey(p.Match)).FirstOrDefault(g => g.Count() > 1) is { } twice)
-            return await Done(account, "NotFilled", $"The slip has {twice.First().Match.Home} v {twice.First().Match.Away} twice; nothing was sent to {account.Site}.");
 
         // 4) Place.
         var newSlip = new Slip
@@ -124,6 +137,7 @@ public class BettingEngine(
             CombinedOdds = plan.CombinedOdds,
             PotentialReturn = Math.Round(stake * plan.CombinedOdds, 2),
             BalanceBefore = balance,
+            SettlementChecks = _rules.SettlementChecks(plan.Picks.Select(p => p.Match.Kickoff)),
             Picks = plan.Picks.Select(p => new SlipPick
             {
                 MatchId = p.Match.Id, League = p.Match.League, Home = p.Match.Home, Away = p.Match.Away,
@@ -180,6 +194,9 @@ public class BettingEngine(
             newSlip.Status = SlipStatus.Pending;
         }
         db.Slips.Add(newSlip);
+        // A placed slip: nothing to do for this account until its first result check (a loss may show there already).
+        if (newSlip.Status == SlipStatus.Pending && newSlip.SettlementChecks.Count > 0)
+            account.NextCheckAt = newSlip.SettlementChecks[0];
         await db.SaveChangesAsync(ct);
         await excel.WriteFileAsync(ct);
 
@@ -235,6 +252,34 @@ public class BettingEngine(
         await db.SaveChangesAsync(ct);
         await excel.WriteFileAsync(ct);
     }
+
+    /// <summary>The slip's result check times; slips placed before these were stored get them from their picks.</summary>
+    private List<DateTime> Checks(Slip s) =>
+        s.SettlementChecks.Count > 0 ? s.SettlementChecks
+        : s.Picks.Count > 0 ? _rules.SettlementChecks(s.Picks.Select(p => p.Kickoff))
+        : [s.CreatedAt.AddMinutes(_rules.MatchMinutes)];
+
+    /// <summary>
+    /// The result should be read now: a check time has passed since it was last read, or the last check time is over and
+    /// the slip is still open (then it is read again every check interval).
+    /// </summary>
+    private bool ResultDue(Slip s)
+    {
+        var now = clock.GetUtcNow().UtcDateTime;
+        var last = s.ResultCheckedAt ?? DateTime.MinValue;
+        var checks = Checks(s);
+        return checks.Any(t => t <= now && t > last)
+            || (checks[^1] <= now && last.AddMinutes(_rules.CheckIntervalMinutes) <= now);
+    }
+
+    /// <summary>The next check time still ahead, or one check interval from now once all have passed.</summary>
+    private DateTime NextResultCheck(Slip s)
+    {
+        var now = clock.GetUtcNow().UtcDateTime;
+        return Checks(s).Where(t => t > now).DefaultIfEmpty(now.AddMinutes(_rules.CheckIntervalMinutes)).Min();
+    }
+
+    private static DateTime EatTime(DateTime utc) => TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), Eat.Zone);
 
     private static string Describe(Account a) => string.Join(" / ", a.Markets.Select(m =>
         m.IntervalKey is null ? $"total {m.Market} {m.Side}" : $"no {m.Market} in minutes {m.IntervalKey}"));

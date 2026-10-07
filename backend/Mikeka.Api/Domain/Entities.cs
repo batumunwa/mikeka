@@ -35,6 +35,8 @@ public class Account
     public bool Stopped { get; set; }
     public decimal? LastBalance { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    /// <summary>When the scheduler next checks this account (matches, or the open slip's result). Null = as soon as possible.</summary>
+    public DateTime? NextCheckAt { get; set; }
 
     public List<Slip> Slips { get; set; } = new();
 }
@@ -90,6 +92,14 @@ public class Slip
     /// <summary>Why a day was skipped, or other notes.</summary>
     public string? Note { get; set; }
 
+    /// <summary>
+    /// UTC times to read the slip's result: each match ends at kickoff + match length; an end is a check time when the next
+    /// match ends more than the settlement gap later, and the last end always is. A loss seen early lets the next slip start.
+    /// </summary>
+    public List<DateTime> SettlementChecks { get; set; } = new();
+    /// <summary>When the result was last read from the site (UTC).</summary>
+    public DateTime? ResultCheckedAt { get; set; }
+
     public List<SlipPick> Picks { get; set; } = new();
 }
 
@@ -127,6 +137,16 @@ public class BettingSettings
     public int MaxLosses { get; set; } = 4;
     /// <summary>Matches with any of these teams are never picked (all accounts). Matched ignoring case, spaces and punctuation.</summary>
     public List<string> ExcludedTeams { get; set; } = new();
+    /// <summary>Each account is checked again this long after its last check.</summary>
+    public int CheckIntervalMinutes { get; set; } = 60;
+    /// <summary>On one betting company, the next account is checked this long after the previous one finished.</summary>
+    public int SameSiteDelayMinutes { get; set; } = 5;
+    /// <summary>A match is assumed over this long after kickoff.</summary>
+    public int MatchMinutes { get; set; } = 180;
+    /// <summary>Two match ends further apart than this get separate result checks.</summary>
+    public int SettlementGapMinutes { get; set; } = 60;
+    /// <summary>Matches are looked for from now over up to this many consecutive days.</summary>
+    public int MaxDaysAhead { get; set; } = 7;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
 

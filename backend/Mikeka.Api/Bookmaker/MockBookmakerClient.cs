@@ -64,8 +64,9 @@ public class MockBookmakerClient(TimeProvider clock) : IBookmakerClient
 
     public Task<bool> FillSlipAsync(IReadOnlyList<Pick> picks, decimal stake, CancellationToken ct) => Task.FromResult(true);
 
-    public Task<BetOutcome> GetOutcomeAsync(string betReference, CancellationToken ct)
+    public Task<BetOutcome> GetOutcomeAsync(Slip slip, CancellationToken ct)
     {
+        var betReference = slip.BetReference ?? "";
         if (Settled.TryGetValue(betReference, out var done)) return Task.FromResult(done);
         if (!Bets.TryGetValue(betReference, out var bet)) return Task.FromResult(BetOutcome.Lost);
         if (clock.GetUtcNow().UtcDateTime < bet.placed.AddHours(1)) return Task.FromResult(BetOutcome.Pending);

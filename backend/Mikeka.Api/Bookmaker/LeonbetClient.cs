@@ -14,6 +14,10 @@ namespace Mikeka.Api.Bookmaker;
 public class LeonbetOptions
 {
     public string DebugDir { get; set; } = "logs/leonbet-debug";
+    /// <summary>Bet-history pages tried in turn to read a slip's result (not seen on the live site yet: check the first run).</summary>
+    public string[] HistoryPaths { get; set; } = ["/profile/history", "/profile/bets-history", "/profile/bets"];
+    /// <summary>Menu link to the bet history, clicked when no path shows the bet.</summary>
+    public string HistoryLinkRegex { get; set; } = @"^\s*(my bets|bet history|bets history|betting history|history)\s*$";
     /// <summary>Lists every football league with a link, e.g. "Argentina - Super League 14".</summary>
     public string FootballPath { get; set; } = "/bets/soccer";
     /// <summary>League links on that page: /bets/soccer/{country}/{id}-{slug}.</summary>
@@ -534,8 +538,23 @@ public sealed class LeonbetClient(
         return m.Success ? int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) : 0;
     }
 
-    public Task<BetOutcome> GetOutcomeAsync(string betReference, CancellationToken ct) =>
-        throw new NotSupportedException("Reading Leonbet bet history is not built.");
+    /// <summary>
+    /// Leonbet gives no bet number, so the bet is found on the bet-history page by its teams (<see cref="BetHistory"/>).
+    /// Not found = Pending, with a "history-not-found" screenshot to correct <c>HistoryPaths</c>.
+    /// </summary>
+    public async Task<BetOutcome> GetOutcomeAsync(Slip slip, CancellationToken ct)
+    {
+        var page = await Page();
+        var found = await BetHistory.ReadAsync(page, At, o.HistoryPaths, o.HistoryLinkRegex, slip, log);
+        if (found is null)
+        {
+            var shot = await SaveDebug(page, "history-not-found");
+            log.LogWarning("Leonbet: slip #{Id} not found in the bet history (screenshot {Shot})", slip.Id, shot);
+            return BetOutcome.Pending;
+        }
+        log.LogInformation("Leonbet: slip #{Id} in history → {Outcome}: {Text}", slip.Id, found.Value.outcome, found.Value.text);
+        return found.Value.outcome;
+    }
 
     /// <summary>
     /// Logs out at the end of a run: profile avatar → Settings (/profile/settings) → "Log out" → "Log out?" confirm → checks

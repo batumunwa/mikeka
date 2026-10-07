@@ -19,7 +19,7 @@ export function SettingsPanel({ onClose, onSaved }: { onClose: () => void; onSav
       .catch((e) => setError((e as Error).message))
   }, [])
 
-  const subtitle = 'Defaults for new accounts; excluded teams apply to every account'
+  const subtitle = 'Defaults for new accounts; automatic checks and excluded teams apply to every account'
   if (!form) return (
     <Modal title="Settings" subtitle={subtitle} width={600} onClose={onClose}>
       {error ? <p className="error">{error}</p> : <p className="muted">Loading settings…</p>}
@@ -52,6 +52,15 @@ export function SettingsPanel({ onClose, onSaved }: { onClose: () => void; onSav
     <label>
       {label}
       <input type="number" step="0.01" min="1.01" value={form[k] || ''} onChange={(e) => set(k, e.target.value)} required />
+    </label>
+  )
+
+  type MinutesKey = 'checkIntervalMinutes' | 'sameSiteDelayMinutes' | 'matchMinutes' | 'settlementGapMinutes' | 'maxDaysAhead'
+  const minutes = (k: MinutesKey, label: string, min: number) => (
+    <label>
+      {label}
+      <input type="number" min={min} step="1" value={form[k]} required
+        onChange={(e) => { setSaved(false); setForm({ ...form, [k]: e.target.value === '' ? 0 : +e.target.value }) }} />
     </label>
   )
 
@@ -101,6 +110,26 @@ export function SettingsPanel({ onClose, onSaved }: { onClose: () => void; onSav
           </label>
         </div>
         <p className="muted small">An account stops betting after this many lost slips in a row, until you reset it.</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Automatic checks</legend>
+        <div className="row2">
+          {minutes('checkIntervalMinutes', 'Check each account every (minutes)', 5)}
+          {minutes('sameSiteDelayMinutes', 'Delay between accounts of one company (minutes)', 0)}
+        </div>
+        <div className="row2">
+          {minutes('maxDaysAhead', 'Look for matches over (days, from today)', 1)}
+          {minutes('matchMinutes', 'A match is over after kickoff + (minutes)', 90)}
+        </div>
+        <div className="row2">
+          {minutes('settlementGapMinutes', 'Settlement gap (minutes)', 0)}
+        </div>
+        <p className="muted small">
+          Matches are looked for without logging in; the system logs in only to place a slip or read a result.
+          A slip's result is read when a match ends (kickoff + {form.matchMinutes} min) and the next match ends more than{' '}
+          {form.settlementGapMinutes} min later, and at the last match's end. If the slip has already lost, the next slip is placed at once.
+        </p>
       </fieldset>
 
       <fieldset>

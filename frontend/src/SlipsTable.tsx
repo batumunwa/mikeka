@@ -98,7 +98,16 @@ export function SlipsTable({ slips, currency, onChanged }: { slips: Slip[]; curr
                 )}
               </td>
               <td className={`num ${balanceTone(s)}`}>{money(s.balanceAfter ?? s.balanceBefore, currency)}</td>
-              <td className="small">{s.betReference ?? ''}{s.note && <div className="slip-note">{s.note}</div>}</td>
+              <td className="small">{s.betReference ?? ''}{s.note && <div className="slip-note">{s.note}</div>}
+                {s.status === 'Pending' && s.settlementChecks.length > 0 && (
+                  <div className="slip-note" title="When the system reads this slip's result: a loss seen early starts the next slip">
+                    Result checks: {s.settlementChecks.map((t) => {
+                      const done = s.resultCheckedAt != null && new Date(s.resultCheckedAt) >= new Date(t)
+                      return <span key={t} className={done ? 'muted' : ''}>{eat(t)}{done ? ' ✓' : ''} </span>
+                    })}
+                  </div>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

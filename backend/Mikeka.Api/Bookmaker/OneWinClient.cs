@@ -26,6 +26,10 @@ public class OneWinMarket
 public class OneWinOptions
 {
     public string DebugDir { get; set; } = "logs/1win-debug";
+    /// <summary>Bet-history pages tried in turn to read a slip's result (not seen on the live site yet: check the first run).</summary>
+    public string[] HistoryPaths { get; set; } = ["/bets-history", "/bets/history", "/profile/bets-history"];
+    /// <summary>Menu link to the bet history, clicked when no path shows the bet.</summary>
+    public string HistoryLinkRegex { get; set; } = @"^\s*(my bets|bet history|bets history|betting history|history)\s*$";
     public string FootballPath { get; set; } = "/betting/prematch/football-18";
     public string MatchCard { get; set; } = "[data-qa='match-card']";
     /// <summary>League links shown under an opened country row (seen on the live site on 2026-10-06).</summary>
@@ -500,8 +504,23 @@ public sealed class OneWinClient(
         return [];
     }";
 
-    public Task<BetOutcome> GetOutcomeAsync(string betReference, CancellationToken ct) =>
-        throw new NotSupportedException("Reading 1win bet history is not set up yet.");
+    /// <summary>
+    /// 1win gives no bet number, so the bet is found on the bet-history page by its teams (<see cref="BetHistory"/>).
+    /// Not found = Pending, with a "history-not-found" screenshot to correct <c>HistoryPaths</c>.
+    /// </summary>
+    public async Task<BetOutcome> GetOutcomeAsync(Slip slip, CancellationToken ct)
+    {
+        var page = await Page();
+        var found = await BetHistory.ReadAsync(page, At, o.HistoryPaths, o.HistoryLinkRegex, slip, log);
+        if (found is null)
+        {
+            var shot = await SaveDebug(page, "history-not-found");
+            log.LogWarning("1win: slip #{Id} not found in the bet history (screenshot {Shot})", slip.Id, shot);
+            return BetOutcome.Pending;
+        }
+        log.LogInformation("1win: slip #{Id} in history → {Outcome}: {Text}", slip.Id, found.Value.outcome, found.Value.text);
+        return found.Value.outcome;
+    }
 
     // ---------- helpers ----------
 
