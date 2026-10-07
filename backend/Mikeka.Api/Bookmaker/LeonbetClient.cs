@@ -359,7 +359,13 @@ public sealed class LeonbetClient(
     private async Task OpenTabAsync(IPage page, string tab)
     {
         var t = page.Locator($"text=/{PageText.TitlePattern(tab)}/i >> visible=true").First;
-        if (await IsVisible(t, 8_000)) { await t.ClickAsync(new() { Timeout = 5_000 }); await page.WaitForTimeoutAsync(1_500); }
+        if (!await IsVisible(t, 8_000)) return;
+        // After reading a long tab the page is scrolled down and the tabs sit under the fixed top bar, where a normal click
+        // times out (seen 2026-10-07: every match lost). Back to the top first; if still covered, send the click to the tab itself.
+        await page.EvaluateAsync("() => window.scrollTo(0, 0)");
+        try { await t.ClickAsync(new() { Timeout = 5_000 }); }
+        catch (TimeoutException) { await t.DispatchEventAsync("click"); }
+        await page.WaitForTimeoutAsync(1_500);
     }
 
     /// <summary>Odds of the "X" (draw) outcome in the visible block titled exactly <paramref name="title"/>, e.g. "10 Minute Result".</summary>
