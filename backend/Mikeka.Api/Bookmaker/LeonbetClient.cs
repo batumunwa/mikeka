@@ -172,7 +172,10 @@ public sealed class LeonbetClient(
                 var (home, away, kickoff) = ParseMatchLink(row[1]);
                 if (home is null || kickoff is null || kickoff > untilUtc) continue;
                 // Outrights ("UEFA Nations League 2026/27" v "Winner") are listed like matches: skip them.
-                if (home.Contains(leagueName, StringComparison.OrdinalIgnoreCase)) continue;
+                // Spaces ignored: the account's "La Liga" must also catch the site's "LaLiga 2026/27" v "Winner".
+                if (Regex.Replace(home, @"\s", "").Contains(Regex.Replace(leagueName, @"\s", ""), StringComparison.OrdinalIgnoreCase)
+                    || away is "Winner" or "Top Goalscorer" or "Top Assist" or "Relegation" || away!.StartsWith("Top ", StringComparison.OrdinalIgnoreCase)
+                    || Regex.IsMatch(home, @"\b20\d\d/\d\d\b")) continue;
                 listed.Add((At(row[0]), league, home, away!, kickoff.Value));
             }
             log.LogInformation("Leonbet: {Count} matches in {League} before {Until:yyyy-MM-dd HH:mm} UTC", listed.Count - before, league, untilUtc);
