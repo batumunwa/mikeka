@@ -222,7 +222,7 @@ public sealed class LeonbetClient(
                 await SaveDebug(page, "markets-failed", fullPage: false);
             }
             log.LogInformation("Leonbet: {Home} v {Away}: {Summary}", m.home, m.away,
-                sels.Count == 0 ? "no total lines" : string.Join(", ", sels.GroupBy(x => x.Market).Select(g => $"{g.Count()} {g.Key} lines")));
+                sels.Count == 0 ? "no total lines" : string.Join(", ", sels.Select(x => $"{x.Label ?? x.Market + " " + x.Side + " " + x.Line} @ {x.Odds:0.00}")));
             result.Add(new MatchInfo(m.url, m.league, m.home, m.away, m.kickoff, sels));
         }
         return result;
