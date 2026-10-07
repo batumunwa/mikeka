@@ -242,6 +242,10 @@ public sealed class LeonbetClient(
                 if (text.Equals($"{country} - {name}", StringComparison.OrdinalIgnoreCase) || text.Equals($"{country} {name}", StringComparison.OrdinalIgnoreCase))
                     return l[0];
             }
+        // Spelling differences in spaces and punctuation only, e.g. "Spain. La Liga" for the site's "Spain - LaLiga".
+        static string Squash(string t) => Regex.Replace(t, @"[^\p{L}\p{N}]", "").ToLowerInvariant();
+        if (country is not null && links.Where(l => Squash(Clean(l[1])) == Squash(country + name)).Select(l => l[0]).Distinct().ToList() is [var only])
+            return only;
         // No country given (e.g. "UEFA Nations League"): accept the league name alone if exactly one league has it.
         var byName = links.Where(l => Clean(l[1]).EndsWith(" - " + name, StringComparison.OrdinalIgnoreCase)).Select(l => l[0]).Distinct().ToList();
         return byName.Count == 1 ? byName[0] : null;
