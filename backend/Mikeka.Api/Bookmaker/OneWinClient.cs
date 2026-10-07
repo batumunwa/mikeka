@@ -59,6 +59,11 @@ public class OneWinOptions
     public string LoginButton { get; set; } = "[data-testid='header-auth-button']";
     /// <summary>When the automatic login hangs, how long to wait for the user to log in by hand in the tab.</summary>
     public int ManualLoginWaitMinutes { get; set; } = 10;
+    /// <summary>
+    /// GeeTest "verify you are human" box (1win sets a gcaptcha4.geetest.com cookie, seen 2026-10-07). It seems to appear on
+    /// the first login after Chrome starts. The system never solves it: it asks the user to, and then carries on.
+    /// </summary>
+    public string CaptchaBox { get; set; } = "[class*='geetest_box'], [class*='geetest_captcha'], [class*='geetest_holder'], [class*='geetest_panel']";
     /// <summary>Close buttons of pop-ups 1win shows over the page (e.g. "Stay updated" notifications after login).</summary>
     public string PopupClose { get; set; } = "[data-testid='subscribeNotificationPopup-close']";
     // Log out: sidebar profile → Settings → Log out → "Log out" again in the confirmation (seen 2026-10-06).
@@ -133,8 +138,32 @@ public sealed class OneWinClient(
                 await page.Locator(o.PhoneInput).First.FillAsync(Regex.Replace(account.Username, @"^\+?255", ""), new() { Timeout = 15_000 });
             await page.Locator(o.PasswordInput).First.FillAsync(password, new() { Timeout = 15_000 });
             await page.Locator(o.LoginSubmit).First.ClickAsync(new() { Timeout = 15_000 });
-            // The button spins while 1win logs in; done when the header Login button has gone.
-            try { await page.Locator(o.LoginButton).First.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 90_000 }); }
+            // The button spins while 1win logs in; done when the header Login button has gone. A GeeTest check is handed
+            // to the user at once (it is never solved by the system); the form stays filled, so solving it finishes the login.
+            try
+            {
+                var captcha = page.Locator(o.CaptchaBox).Locator("visible=true").First;
+                var done = false;
+                for (int waited = 0; waited < 90 && !done; waited += 2)
+                {
+                    if (!await page.Locator(o.LoginButton).First.IsVisibleAsync()) { done = true; break; }
+                    if (await captcha.CountAsync() > 0)
+                    {
+                        var shot = await SaveDebug(page, "captcha", fullPage: false);
+                        log.LogWarning("1win: GeeTest check shown at login for {User} (screenshot {Shot})", account.Username, shot);
+                        await browserTab.NoteAsync(
+                            $"1win asks to verify you are human (GeeTest puzzle) for {account.Username}. Please complete it in the 1win tab in Chrome " +
+                            $"(the login form is already filled); the run continues by itself (waiting up to {o.ManualLoginWaitMinutes} minutes).");
+                        await page.BringToFrontAsync();
+                        await page.Locator(o.LoginButton).First.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = o.ManualLoginWaitMinutes * 60_000 });
+                        await browserTab.NoteAsync("1win: check completed; the run continues.");
+                        done = true;
+                        break;
+                    }
+                    await page.WaitForTimeoutAsync(2_000);
+                }
+                if (!done) throw new TimeoutException("1win login still spinning after 90 s.");
+            }
             catch (TimeoutException)
             {
                 // 1win sometimes never finishes a login typed by the system (the button keeps spinning). A login made by hand
