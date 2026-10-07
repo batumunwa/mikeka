@@ -20,6 +20,9 @@ public class Account
     /// <summary>Normal stake for this account; doubled after each consecutive loss, back to this after a win.</summary>
     public decimal BaseStake { get; set; } = 1000;
 
+    /// <summary>Most picks (matches) one slip may hold for this account (new accounts: Betting:MaxMatches, 6).</summary>
+    public int MaxPicks { get; set; } = 6;
+
     /// <summary>Betting stops after this many losses in a row (default from Settings when the account is created).</summary>
     public int MaxLosses { get; set; } = 4;
 

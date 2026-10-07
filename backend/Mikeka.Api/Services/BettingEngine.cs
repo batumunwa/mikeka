@@ -113,7 +113,7 @@ public class BettingEngine(
         }
         if (plan is null)
             return await Done(account, "NoSlip",
-                $"No combination of up to {_rules.MaxMatches} picks at {accountRules.MinPickOdds}–{accountRules.MaxPickOdds} reaches " +
+                $"No combination of up to {accountRules.MaxMatches} picks at {accountRules.MinPickOdds}–{accountRules.MaxPickOdds} reaches " +
                 $"{accountRules.MinCombinedOdds}–{accountRules.MaxCombinedOdds} within {_rules.MaxDaysAhead} days in {string.Join(", ", account.Leagues)}. " +
                 $"Next check in {_rules.CheckIntervalMinutes} min.");
 

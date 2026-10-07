@@ -88,6 +88,7 @@ public class BettingRules
         (copy.MinPickOdds, copy.MaxPickOdds) = (account.MinPickOdds, account.MaxPickOdds);
         (copy.MinCombinedOdds, copy.MaxCombinedOdds) = (account.MinCombinedOdds, account.MaxCombinedOdds);
         copy.StopAfterLosses = account.MaxLosses;
+        copy.MaxMatches = account.MaxPicks;
         return copy;
     }
 }

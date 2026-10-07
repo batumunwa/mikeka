@@ -10,7 +10,7 @@ namespace Mikeka.Api.Controllers;
 public record AccountDto(int Id, string Name, string Url, string Site, string Username, string Currency, bool IsActive,
     List<string> Leagues, List<MarketChoice> Markets, int LossStreak, bool Stopped, decimal? LastBalance, decimal NextStake, decimal BaseStake,
     int MaxLosses, decimal MinPickOdds, decimal MaxPickOdds, decimal MinCombinedOdds, decimal MaxCombinedOdds,
-    DateTime? NextCheckAt);
+    DateTime? NextCheckAt, int MaxPicks);
 
 public record SaveAccountRequest(
     [Required] string Name,
@@ -29,14 +29,16 @@ public record SaveAccountRequest(
     /// <summary>Losses in a row that stop betting. Empty = the default from Settings.</summary>
     int? MaxLosses = null,
     /// <summary>This account's odds ranges. Empty = the defaults from Settings.</summary>
-    decimal? MinPickOdds = null, decimal? MaxPickOdds = null, decimal? MinCombinedOdds = null, decimal? MaxCombinedOdds = null);
+    decimal? MinPickOdds = null, decimal? MaxPickOdds = null, decimal? MinCombinedOdds = null, decimal? MaxCombinedOdds = null,
+    /// <summary>Most picks one slip may hold. Empty = Betting:MaxMatches (6).</summary>
+    int? MaxPicks = null);
 
 [ApiController, Route("api/accounts")]
 public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.Extensions.Options.IOptions<BettingRules> rules) : ControllerBase
 {
     private AccountDto ToDto(Account a) => new(a.Id, a.Name, a.Url, a.Site, a.Username, a.Currency, a.IsActive,
         a.Leagues, a.Markets, a.LossStreak, a.Stopped, a.LastBalance, StakeCalculator.NextStake(a), a.BaseStake,
-        a.MaxLosses, a.MinPickOdds, a.MaxPickOdds, a.MinCombinedOdds, a.MaxCombinedOdds, a.NextCheckAt);
+        a.MaxLosses, a.MinPickOdds, a.MaxPickOdds, a.MinCombinedOdds, a.MaxCombinedOdds, a.NextCheckAt, a.MaxPicks);
 
     [HttpGet]
     public async Task<IEnumerable<AccountDto>> List() =>
@@ -50,8 +52,9 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
         if (req.BaseStake is <= 0) return ValidationProblem("Base stake must be more than 0.");
         var r = rules.Value; // current Settings values are the defaults
         var odds = (req.MinPickOdds ?? r.MinPickOdds, req.MaxPickOdds ?? r.MaxPickOdds, req.MinCombinedOdds ?? r.MinCombinedOdds, req.MaxCombinedOdds ?? r.MaxCombinedOdds);
+        var maxPicks = req.MaxPicks ?? r.MaxMatches;
         var maxLosses = req.MaxLosses ?? r.StopAfterLosses;
-        if (LimitsError(odds, maxLosses) is { } limitsError) return ValidationProblem(limitsError);
+        if (LimitsError(odds, maxLosses, maxPicks) is { } limitsError) return ValidationProblem(limitsError);
         var site = string.IsNullOrWhiteSpace(req.Site) ? Bookmaker.SiteBookmakerFactory.GuessSite(req.Url) : req.Site.Trim().ToLowerInvariant();
         if (!Bookmaker.SiteBookmakerFactory.Sites.Contains(site)) return ValidationProblem($"Site must be one of: {string.Join(", ", Bookmaker.SiteBookmakerFactory.Sites)}.");
         var markets = CleanMarkets(req.Markets);
@@ -71,6 +74,7 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
             Markets = markets,
             BaseStake = req.BaseStake ?? rules.Value.BaseStake,
             MaxLosses = maxLosses,
+            MaxPicks = maxPicks,
             NextCheckAt = firstCheck,
             MinPickOdds = odds.Item1, MaxPickOdds = odds.Item2, MinCombinedOdds = odds.Item3, MaxCombinedOdds = odds.Item4,
             Site = site,
@@ -89,8 +93,9 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
         if (IntervalError(req.Markets) is { } intervalError) return ValidationProblem(intervalError);
         if (req.BaseStake is <= 0) return ValidationProblem("Base stake must be more than 0.");
         var odds = (req.MinPickOdds ?? a.MinPickOdds, req.MaxPickOdds ?? a.MaxPickOdds, req.MinCombinedOdds ?? a.MinCombinedOdds, req.MaxCombinedOdds ?? a.MaxCombinedOdds);
+        var maxPicks = req.MaxPicks ?? a.MaxPicks;
         var maxLosses = req.MaxLosses ?? a.MaxLosses;
-        if (LimitsError(odds, maxLosses) is { } limitsError) return ValidationProblem(limitsError);
+        if (LimitsError(odds, maxLosses, maxPicks) is { } limitsError) return ValidationProblem(limitsError);
         var site = string.IsNullOrWhiteSpace(req.Site) ? Bookmaker.SiteBookmakerFactory.GuessSite(req.Url) : req.Site.Trim().ToLowerInvariant();
         if (!Bookmaker.SiteBookmakerFactory.Sites.Contains(site)) return ValidationProblem($"Site must be one of: {string.Join(", ", Bookmaker.SiteBookmakerFactory.Sites)}.");
         var markets = CleanMarkets(req.Markets);
@@ -100,6 +105,7 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
         var leagues = markets.SelectMany(m => m.Leagues).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         a.Markets = markets;
         (a.MinPickOdds, a.MaxPickOdds, a.MinCombinedOdds, a.MaxCombinedOdds) = odds;
+        a.MaxPicks = maxPicks;
         if (maxLosses != a.MaxLosses)
         {
             a.MaxLosses = maxLosses;
@@ -255,9 +261,10 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
             .DistinctBy(m => (m.Market, m.Side, m.IntervalKey, m.Line, string.Join("|", m.Leagues.Order(StringComparer.OrdinalIgnoreCase)).ToLowerInvariant()))
             .ToList();
 
-    private string? LimitsError((decimal minPick, decimal maxPick, decimal minCombined, decimal maxCombined) o, int maxLosses) =>
+    private static string? LimitsError((decimal minPick, decimal maxPick, decimal minCombined, decimal maxCombined) o, int maxLosses, int maxPicks) =>
         maxLosses < 1 ? "Maximum losses must be at least 1."
-        : BettingRules.OddsError(o.minPick, o.maxPick, o.minCombined, o.maxCombined, rules.Value.MaxMatches);
+        : maxPicks is < 1 or > 20 ? "Maximum picks per slip must be between 1 and 20."
+        : BettingRules.OddsError(o.minPick, o.maxPick, o.minCombined, o.maxCombined, maxPicks);
 
     /// <summary>An interval needs both start and end, start before end, within minutes 1–90.</summary>
     private static string? IntervalError(IEnumerable<MarketChoice>? markets)

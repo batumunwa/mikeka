@@ -62,13 +62,14 @@ export function AccountForm({ settings, account, onSaved, onCancel }: Props) {
     maxPickOdds: account?.maxPickOdds ?? settings?.maxPickOdds ?? 1.2,
     minCombinedOdds: account?.minCombinedOdds ?? settings?.minCombinedOdds ?? 2.1,
     maxCombinedOdds: account?.maxCombinedOdds ?? settings?.maxCombinedOdds ?? 2.2,
+    maxPicks: account?.maxPicks ?? settings?.maxMatches ?? 6,
     isActive: account?.isActive ?? true,
   })
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const pickRange = form.minPickOdds && form.maxPickOdds ? `${form.minPickOdds.toFixed(2)}–${form.maxPickOdds.toFixed(2)}` : 'in the set range'
-  const maxMatches = settings?.maxMatches ?? 6
+  const maxMatches = form.maxPicks || 1
   const best = Math.pow(form.maxPickOdds || 0, maxMatches)
 
   // Settings may arrive after the form opened: a new account then takes their values.
@@ -106,6 +107,7 @@ export function AccountForm({ settings, account, onSaved, onCancel }: Props) {
     if (noLeague >= 0) return setError(`Add at least one league to the ${ordinal(noLeague + 1)} market.`)
     if (!(form.baseStake > 0)) return setError('Base stake must be more than 0.')
     if (!(form.maxLosses >= 1)) return setError('Maximum losses must be at least 1.')
+    if (!(form.maxPicks >= 1 && form.maxPicks <= 20)) return setError('Maximum picks per slip must be between 1 and 20.')
     if (!(form.maxPickOdds > form.minPickOdds)) return setError('Maximum pick odds must be higher than the minimum.')
     if (!(form.maxCombinedOdds > form.minCombinedOdds)) return setError('Maximum combined odds must be higher than the minimum.')
     if (!account && !form.password) return setError('Password is required.')
@@ -279,6 +281,13 @@ export function AccountForm({ settings, account, onSaved, onCancel }: Props) {
         <div className="row2">
           {oddsInput('minCombinedOdds', 'Minimum')}
           {oddsInput('maxCombinedOdds', 'Maximum')}
+        </div>
+        <div className="row2">
+          <label>
+            Maximum picks per slip
+            <input type="number" min="1" max="20" step="1" value={form.maxPicks || ''} required
+              onChange={(e) => set('maxPicks', +e.target.value)} />
+          </label>
         </div>
         <p className="muted small">
           Up to {maxMatches} picks. With picks up to {(form.maxPickOdds || 0).toFixed(2)}, the highest possible slip is {best.toFixed(2)}

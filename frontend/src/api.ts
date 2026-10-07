@@ -76,6 +76,8 @@ export interface Account {
   maxCombinedOdds: number
   /** When the system next checks this account (UTC ISO); null = as soon as possible. */
   nextCheckAt: string | null
+  /** Most picks one slip may hold. */
+  maxPicks: number
 }
 
 export interface SaveAccount {
@@ -95,6 +97,8 @@ export interface SaveAccount {
   maxPickOdds: number
   minCombinedOdds: number
   maxCombinedOdds: number
+  /** Most picks one slip may hold (default 6). */
+  maxPicks: number
 }
 
 export interface Pick {

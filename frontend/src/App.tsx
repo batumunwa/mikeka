@@ -190,7 +190,7 @@ export default function App() {
               <div><span className="stat-label">Loss streak</span><StreakDots streak={a.lossStreak} max={a.maxLosses} /></div>
             </div>
             <div className="limits-line muted small">
-              Picks {range(a.minPickOdds, a.maxPickOdds)} · Combined {range(a.minCombinedOdds, a.maxCombinedOdds)} · stops after {a.maxLosses} losses
+              Picks {range(a.minPickOdds, a.maxPickOdds)} · Combined {range(a.minCombinedOdds, a.maxCombinedOdds)} · up to {a.maxPicks} picks · stops after {a.maxLosses} losses
               {a.isActive && !a.stopped && (
                 <div>Next check: {!a.nextCheckAt || new Date(a.nextCheckAt) <= new Date() ? 'due now' : `${eat(a.nextCheckAt)} EAT`}</div>
               )}
