@@ -37,6 +37,10 @@ public class MikekaDb(DbContextOptions<MikekaDb> options) : DbContext(options)
             e.HasIndex(a => new { a.Url, a.Username }).IsUnique();
             e.Property(a => a.LastBalance).HasPrecision(18, 2);
             e.Property(a => a.BaseStake).HasPrecision(18, 2);
+            e.Property(a => a.MinPickOdds).HasPrecision(8, 3);
+            e.Property(a => a.MaxPickOdds).HasPrecision(8, 3);
+            e.Property(a => a.MinCombinedOdds).HasPrecision(8, 3);
+            e.Property(a => a.MaxCombinedOdds).HasPrecision(8, 3);
             e.OwnsMany(a => a.Markets, m => m.ToJson());
         });
 

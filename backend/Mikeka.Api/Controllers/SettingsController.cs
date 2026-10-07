@@ -6,16 +6,19 @@ namespace Mikeka.Api.Controllers;
 
 /// <param name="DryRun">True: "Run now" builds slips but never places them (Betting:DryRun in appsettings).</param>
 /// <param name="PlaceBets">True: runs click Place themselves; false: they fill the slip and the user places it (Betting:PlaceBets).</param>
-public record SettingsDto(decimal MinPickOdds, decimal MaxPickOdds, decimal MinCombinedOdds, decimal MaxCombinedOdds, DateTime UpdatedAt, int MaxMatches, bool DryRun, bool PlaceBets);
+public record SettingsDto(decimal MinPickOdds, decimal MaxPickOdds, decimal MinCombinedOdds, decimal MaxCombinedOdds, DateTime UpdatedAt, int MaxMatches, bool DryRun, bool PlaceBets,
+    int MaxLosses, List<string> ExcludedTeams);
 
-public record SaveSettingsRequest(decimal MinPickOdds, decimal MaxPickOdds, decimal MinCombinedOdds, decimal MaxCombinedOdds);
+public record SaveSettingsRequest(decimal MinPickOdds, decimal MaxPickOdds, decimal MinCombinedOdds, decimal MaxCombinedOdds,
+    int MaxLosses = 4, List<string>? ExcludedTeams = null);
 
-/// <summary>System-wide odds settings (Settings page), stored in the database.</summary>
+/// <summary>System-wide settings: default odds and maximum losses for new accounts, excluded teams (Settings page), stored in the database.</summary>
 [ApiController, Route("api/settings")]
 public class SettingsController(SettingsService settings, Microsoft.Extensions.Options.IOptions<BettingRules> rules) : ControllerBase
 {
     private SettingsDto ToDto(BettingSettings s) =>
-        new(s.MinPickOdds, s.MaxPickOdds, s.MinCombinedOdds, s.MaxCombinedOdds, s.UpdatedAt, rules.Value.MaxMatches, rules.Value.DryRun, rules.Value.PlaceBets);
+        new(s.MinPickOdds, s.MaxPickOdds, s.MinCombinedOdds, s.MaxCombinedOdds, s.UpdatedAt, rules.Value.MaxMatches, rules.Value.DryRun, rules.Value.PlaceBets,
+            s.MaxLosses, s.ExcludedTeams);
 
     [HttpGet]
     public async Task<SettingsDto> Get(CancellationToken ct) => ToDto(await settings.GetAsync(ct));
@@ -27,6 +30,7 @@ public class SettingsController(SettingsService settings, Microsoft.Extensions.O
         {
             MinPickOdds = req.MinPickOdds, MaxPickOdds = req.MaxPickOdds,
             MinCombinedOdds = req.MinCombinedOdds, MaxCombinedOdds = req.MaxCombinedOdds,
+            MaxLosses = req.MaxLosses, ExcludedTeams = SettingsService.CleanTeams(req.ExcludedTeams),
         };
         if (settings.Validate(s) is { } problem) return ValidationProblem(problem);
         return ToDto(await settings.SaveAsync(s, ct));

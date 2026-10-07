@@ -109,7 +109,7 @@ public class BettingEngine(
             plan = SlipBuilder.Build(matches.Where(m => m.Kickoff < endOfToday.AddDays(d)), accountRules);
         if (plan is null)
             return await Skip(account, today, stake, balance,
-                $"No combination of up to {_rules.MaxMatches} picks at {_rules.MinPickOdds}–{_rules.MaxPickOdds} reaches {_rules.MinCombinedOdds}–{_rules.MaxCombinedOdds}. No bet.", ct);
+                $"No combination of up to {_rules.MaxMatches} picks at {accountRules.MinPickOdds}–{accountRules.MaxPickOdds} reaches {accountRules.MinCombinedOdds}–{accountRules.MaxCombinedOdds}. No bet.", ct);
 
         // Last guard: never send two selections of one match to a site (sites refuse them in one accumulator).
         if (plan.Picks.GroupBy(p => SlipBuilder.MatchKey(p.Match)).FirstOrDefault(g => g.Count() > 1) is { } twice)
@@ -218,19 +218,19 @@ public class BettingEngine(
         account.LossStreak = won ? 0 : account.LossStreak + 1;
         await Log(account, $"Slip #{slip.Id} {slip.Status}. Loss streak now {account.LossStreak}.");
 
-        if (!won && account.LossStreak >= _rules.StopAfterLosses)
+        if (!won && account.LossStreak >= account.MaxLosses)
         {
             account.Stopped = true;
             await notifier.SendAsync($"STOPPED: {account.LossStreak} losses in a row ({account.Username})",
                 $"Account {account.Username} lost {account.LossStreak} slips in a row. Betting is stopped.\n" +
                 $"Balance: {balance:N0} {account.Currency}. Reset the account in the dashboard to resume at {account.BaseStake:N0}.", ct);
         }
-        else if (!won && account.LossStreak == _rules.AlertAfterLosses)
+        else if (!won && account.LossStreak == account.MaxLosses - 1)
         {
             await notifier.SendAsync($"{account.LossStreak} losses in a row ({account.Username})",
                 $"Account {account.Username} has lost {account.LossStreak} slips in a row.\n" +
                 $"Next stake: {StakeCalculator.NextStake(account):N0} {account.Currency}. Balance: {balance:N0}.\n" +
-                $"Betting stops automatically after {_rules.StopAfterLosses} losses.", ct);
+                $"Betting stops automatically after {account.MaxLosses} losses.", ct);
         }
         await db.SaveChangesAsync(ct);
         await excel.WriteFileAsync(ct);

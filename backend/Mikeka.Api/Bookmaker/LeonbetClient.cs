@@ -74,7 +74,7 @@ public class LeonbetFactory(IOptions<LeonbetOptions> options, SharedBrowser brow
     public async Task<IBookmakerClient> CreateAsync(Account account, string password, CancellationToken ct)
     {
         var tab = await browser.OpenTabAsync(account, options.Value.HeaderLogin, ct);
-        return new LeonbetClient(tab, account, password, options.Value, rules.Value, log);
+        return new LeonbetClient(tab, account, password, options.Value, rules.Value.ForAccount(account), log);
     }
 }
 

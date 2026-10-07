@@ -6,7 +6,7 @@ using Mikeka.Api.Domain;
 namespace Mikeka.Api.Services;
 
 /// <summary>
-/// Odds settings live in the database (Settings page). They are copied onto the shared <see cref="BettingRules"/>
+/// Settings (odds defaults, maximum losses, excluded teams) live in the database (Settings page). They are copied onto the shared <see cref="BettingRules"/>
 /// instance at startup and on every save, so the engine, analysis and site clients all use the current values.
 /// </summary>
 public class SettingsService(MikekaDb db, IOptions<BettingRules> rules)
@@ -18,19 +18,14 @@ public class SettingsService(MikekaDb db, IOptions<BettingRules> rules)
     public async Task ApplyAsync(CancellationToken ct) => Apply(await GetAsync(ct));
 
     /// <summary>Checks a new set of values; returns the problem in plain words, or null if they are usable.</summary>
-    public string? Validate(BettingSettings s)
-    {
-        if (s.MinPickOdds < 1.01m) return "Minimum pick odds must be at least 1.01.";
-        if (s.MaxPickOdds <= s.MinPickOdds) return "Maximum pick odds must be higher than the minimum.";
-        if (s.MaxCombinedOdds <= s.MinCombinedOdds) return "Maximum combined odds must be higher than the minimum.";
-        if (s.MinCombinedOdds < s.MinPickOdds) return "Minimum combined odds can't be below the minimum pick odds.";
-        var maxMatches = rules.Value.MaxMatches;
-        var best = (decimal)Math.Pow((double)s.MaxPickOdds, maxMatches);
-        if (best < s.MinCombinedOdds)
-            return $"With picks up to {s.MaxPickOdds:0.00} and at most {maxMatches} matches, the best slip is {best:0.00}, " +
-                   $"so {s.MinCombinedOdds:0.00} can never be reached.";
-        return null;
-    }
+    public string? Validate(BettingSettings s) =>
+        s.MaxLosses < 1 ? "Maximum losses must be at least 1."
+        : BettingRules.OddsError(s.MinPickOdds, s.MaxPickOdds, s.MinCombinedOdds, s.MaxCombinedOdds, rules.Value.MaxMatches);
+
+    /// <summary>One entry per team, trimmed, no duplicates.</summary>
+    public static List<string> CleanTeams(IEnumerable<string>? teams) =>
+        (teams ?? []).SelectMany(t => t.Split(',', ';', '\n')).Select(t => t.Trim()).Where(t => t.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
     public async Task<BettingSettings> SaveAsync(BettingSettings s, CancellationToken ct)
     {
@@ -40,10 +35,13 @@ public class SettingsService(MikekaDb db, IOptions<BettingRules> rules)
         row.MaxPickOdds = s.MaxPickOdds;
         row.MinCombinedOdds = s.MinCombinedOdds;
         row.MaxCombinedOdds = s.MaxCombinedOdds;
+        row.MaxLosses = s.MaxLosses;
+        row.ExcludedTeams = CleanTeams(s.ExcludedTeams);
         row.UpdatedAt = DateTime.UtcNow;
         db.RunLogs.Add(new RunLog
         {
-            Message = $"Settings changed: pick odds {row.MinPickOdds:0.00}–{row.MaxPickOdds:0.00}, combined {row.MinCombinedOdds:0.00}–{row.MaxCombinedOdds:0.00}.",
+            Message = $"Settings changed: pick odds {row.MinPickOdds:0.00}–{row.MaxPickOdds:0.00}, combined {row.MinCombinedOdds:0.00}–{row.MaxCombinedOdds:0.00}, " +
+                      $"max losses {row.MaxLosses}, excluded teams: {(row.ExcludedTeams.Count == 0 ? "none" : string.Join(", ", row.ExcludedTeams))}.",
         });
         await db.SaveChangesAsync(ct);
         Apply(row);
@@ -57,5 +55,7 @@ public class SettingsService(MikekaDb db, IOptions<BettingRules> rules)
         r.MaxPickOdds = s.MaxPickOdds;
         r.MinCombinedOdds = s.MinCombinedOdds;
         r.MaxCombinedOdds = s.MaxCombinedOdds;
+        r.StopAfterLosses = s.MaxLosses;
+        r.ExcludedTeams = s.ExcludedTeams;
     }
 }

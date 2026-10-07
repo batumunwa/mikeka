@@ -68,7 +68,7 @@ public class SlipAnalysis(
         if (matches.Count == 0) verdict = "No matches in the window for the account's leagues: no slip.";
         else if (plan is null)
             verdict = $"{usable} of {matches.Count} matches have a usable pick, but no combination of up to {_rules.MaxMatches} reaches " +
-                      $"{_rules.MinCombinedOdds:0.00}–{_rules.MaxCombinedOdds:0.00}: no slip.";
+                      $"{rules.MinCombinedOdds:0.00}–{rules.MaxCombinedOdds:0.00}: no slip.";
         else verdict = $"Slip ready: {plan.Picks.Count} picks at {plan.CombinedOdds:0.00}, stake {stake:N0} {account.Currency}.";
 
         if (plan is null) LastPlans.TryRemove(account.Id, out _);

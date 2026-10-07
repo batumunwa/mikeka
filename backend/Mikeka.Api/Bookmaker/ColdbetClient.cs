@@ -127,7 +127,7 @@ public class ColdbetFactory(IOptions<ColdbetOptions> options, SharedBrowser brow
     {
         var o = options.Value;
         var tab = await browser.OpenTabAsync(account, o.LoginButton, ct);
-        return new ColdbetClient(tab, account, password, o, rules.Value, reader, log);
+        return new ColdbetClient(tab, account, password, o, rules.Value.ForAccount(account), reader, log);
     }
 }
 

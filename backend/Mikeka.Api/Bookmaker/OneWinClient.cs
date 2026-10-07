@@ -85,7 +85,7 @@ public class OneWinFactory(IOptions<OneWinOptions> options, SharedBrowser browse
     {
         var o = options.Value;
         var tab = await browser.OpenTabAsync(account, o.LoginButton, ct);
-        return new OneWinClient(tab, account, password, o, rules.Value, log);
+        return new OneWinClient(tab, account, password, o, rules.Value.ForAccount(account), log);
     }
 }
 

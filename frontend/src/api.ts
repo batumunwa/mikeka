@@ -69,6 +69,11 @@ export interface Account {
   lastBalance: number | null
   nextStake: number
   baseStake: number
+  maxLosses: number
+  minPickOdds: number
+  maxPickOdds: number
+  minCombinedOdds: number
+  maxCombinedOdds: number
 }
 
 export interface SaveAccount {
@@ -81,6 +86,13 @@ export interface SaveAccount {
   currency: string
   isActive: boolean
   baseStake: number
+  /** Losses in a row that stop betting; defaults from Settings. */
+  maxLosses: number
+  /** This account's odds ranges; default from Settings. */
+  minPickOdds: number
+  maxPickOdds: number
+  minCombinedOdds: number
+  maxCombinedOdds: number
 }
 
 export interface Pick {
@@ -183,6 +195,10 @@ export interface Settings {
   dryRun: boolean
   /** True: runs click Place themselves (real money); false: they fill the slip and you place it. */
   placeBets: boolean
+  /** Default maximum losses in a row for new accounts. */
+  maxLosses: number
+  /** Matches with these teams are never picked (all accounts). */
+  excludedTeams: string[]
 }
 
 export interface RunResult {
@@ -226,6 +242,7 @@ export const api = {
   slips: (accountId?: number) => call<Slip[]>(`/slips${accountId ? `?accountId=${accountId}` : ''}`),
   logs: (accountId?: number) => call<RunLog[]>(`/logs${accountId ? `?accountId=${accountId}` : ''}`),
   balanceHistory: (id: number) => call<BalancePoint[]>(`/accounts/${id}/balance-history`),
+  totalBalanceHistory: () => call<BalancePoint[]>('/accounts/balance-history'),
   settings: () => call<Settings>('/settings'),
   saveSettings: (s: Settings) => call<Settings>('/settings', { method: 'PUT', body: JSON.stringify(s) }),
   settleSlip: (id: number, won: boolean) => call<void>(`/slips/${id}/settle?won=${won}`, { method: 'POST' }),

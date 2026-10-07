@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, choiceText, isPlaced, pickText, SITE_NAMES, type Account, type MatchesResult, type Settings, type Slip } from './api'
+import { api, choiceText, isPlaced, pickText, SITE_NAMES, type Account, type BalancePoint, type MatchesResult, type Settings, type Slip } from './api'
+import { BalanceChart } from './BalanceChart'
 import { AccountForm } from './AccountForm'
 import { AccountPanel } from './AccountPanel'
 import { AnalysisPanel } from './AnalysisPanel'
@@ -23,6 +24,7 @@ export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
+  const [totalHistory, setTotalHistory] = useState<BalancePoint[] | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -78,6 +80,15 @@ export default function App() {
   const todays = slips.filter((s) => s.betDay === today && s.status !== 'Skipped').length
   const placedToday = slips.filter((s) => s.betDay === today && isPlaced(s))
   const totalBalance = accounts.reduce((sum, a) => sum + (a.lastBalance ?? 0), 0)
+  const currencies = [...new Set(accounts.map((a) => a.currency))]
+
+  const openTotalHistory = async () => {
+    try {
+      setTotalHistory(await api.totalBalanceHistory())
+    } catch (e) {
+      setNotice({ kind: 'error', text: (e as Error).message })
+    }
+  }
 
   return (
     <>
@@ -98,8 +109,11 @@ export default function App() {
           <button className="on-dark" onClick={() => setEditing('new')}>+ Register account</button>
         </div>
         <div className="chips">
-          <span className="chip">Picks {range(settings?.minPickOdds, settings?.maxPickOdds)}</span>
-          <span className="chip">Combined {range(settings?.minCombinedOdds, settings?.maxCombinedOdds)}</span>
+          {settings && settings.excludedTeams.length > 0 && (
+            <span className="chip" title={settings.excludedTeams.join(', ')}>
+              {settings.excludedTeams.length} excluded team{settings.excludedTeams.length === 1 ? '' : 's'}
+            </span>
+          )}
           <span className="chip">Daily 08:00 EAT</span>
           {settings && <span className="chip mode">{settings.dryRun ? 'Run now: dry run' : settings.placeBets ? 'Runs place bets automatically' : 'Run now fills the bet slip · you place it'}</span>}
         </div>
@@ -107,13 +121,24 @@ export default function App() {
     </header>
     <div className="page">
       <section className="summary">
-        <Stat label="Total balance" value={money(totalBalance)} note={`${accounts.length} account${accounts.length === 1 ? '' : 's'}`} />
+        <button type="button" className="stat-button" onClick={openTotalHistory} title="Show the overall balance history">
+          <Stat label="Total balance" value={money(totalBalance)}
+            note={<>{accounts.length} account{accounts.length === 1 ? '' : 's'} · <u>history</u></>} />
+        </button>
         <Stat label="Active accounts" value={`${accounts.filter((a) => a.isActive && !a.stopped).length} / ${accounts.length}`}
           note={accounts.some((a) => a.stopped) ? 'some stopped' : 'all running'} tone={accounts.some((a) => a.stopped) ? 'bad' : undefined} />
         <Stat label="Waiting for you" value={waitingAll} note="slips to place or mark Won/Lost" tone={waitingAll > 0 ? 'warn' : undefined} />
         <Stat label="Bets placed today" value={`${new Set(placedToday.map((s) => s.accountId)).size} / ${accounts.filter((a) => a.isActive).length}`}
           note={`${placedToday.length} placed · ${todays} slips today`} tone={placedToday.length > 0 ? 'good' : undefined} />
       </section>
+
+      {totalHistory && (
+        <Modal title="Overall balance history" width={820} onClose={() => setTotalHistory(null)}
+          subtitle={`All ${accounts.length} accounts added together, after every recorded balance change`
+            + (currencies.length > 1 ? ` (mixed currencies: ${currencies.join(', ')})` : '')}>
+          <BalanceChart points={totalHistory} currency={currencies.length === 1 ? currencies[0] : ''} />
+        </Modal>
+      )}
 
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} onSaved={setSettings} />}
 
@@ -162,7 +187,10 @@ export default function App() {
             </div>
             <div className="mini">
               <div><span className="stat-label">Next stake</span><b>{money(a.nextStake, a.currency)}</b></div>
-              <div><span className="stat-label">Loss streak</span><StreakDots streak={a.lossStreak} /></div>
+              <div><span className="stat-label">Loss streak</span><StreakDots streak={a.lossStreak} max={a.maxLosses} /></div>
+            </div>
+            <div className="limits-line muted small">
+              Picks {range(a.minPickOdds, a.maxPickOdds)} · Combined {range(a.minCombinedOdds, a.maxCombinedOdds)} · stops after {a.maxLosses} losses
             </div>
             {placed && (
               <div className="placed-today" title={placed.betReference ? `Bet number ${placed.betReference}` : undefined}>
@@ -254,7 +282,7 @@ export default function App() {
           icon={<SiteAvatar account={preview.account} size={44} />} onClose={() => setPreview(null)}>
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Kickoff (EAT)</th><th>Match</th><th>Under lines / intervals read</th><th>Pick ({range(settings?.minPickOdds, settings?.maxPickOdds)})</th></tr></thead>
+              <thead><tr><th>Kickoff (EAT)</th><th>Match</th><th>Under lines / intervals read</th><th>Pick ({range(preview.account.minPickOdds, preview.account.maxPickOdds)})</th></tr></thead>
               <tbody>
                 {preview.result.matches.map((m) => (
                   <tr key={m.url}>

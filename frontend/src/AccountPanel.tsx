@@ -69,7 +69,7 @@ export function AccountPanel({ account, slips, refreshKey, onChanged, onClose }:
       <div className="summary in-panel">
         <Stat label="Balance" value={money(account.lastBalance, account.currency)} />
         <Stat label="Next stake" value={money(account.nextStake, account.currency)} note={`base ${account.baseStake.toLocaleString()}`} />
-        <Stat label="Loss streak" value={<StreakDots streak={account.lossStreak} />} tone={account.lossStreak >= 3 ? 'bad' : undefined} />
+        <Stat label="Loss streak" value={<StreakDots streak={account.lossStreak} max={account.maxLosses} />} tone={account.lossStreak >= account.maxLosses - 1 && account.lossStreak > 0 ? 'bad' : undefined} />
         <Stat label="Results" value={settled.length ? `${won} won / ${settled.length - won} lost` : 'none yet'}
           note={waiting ? `${waiting} waiting for you` : undefined} tone={waiting ? 'warn' : undefined} />
       </div>

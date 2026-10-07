@@ -45,6 +45,7 @@ public static class SlipBuilder
     /// </summary>
     public static Pick? BestPick(MatchInfo match, BettingRules rules)
     {
+        if (ExcludedTeam(match, rules) is not null) return null;
         foreach (var choice in rules.Markets)
         {
             // A market row only applies to the leagues registered on it.
@@ -69,6 +70,8 @@ public static class SlipBuilder
     public static MatchDecision Explain(MatchInfo match, BettingRules rules)
     {
         var steps = new List<string>();
+        if (ExcludedTeam(match, rules) is { } team)
+            return new MatchDecision(match, null, [$"{team} is an excluded team (Settings): no bet on this match."]);
         var rows = rules.Markets.Select((c, i) => (c, i))
             .Where(x => x.c.Leagues.Any(l => l.Trim().Equals(match.League.Trim(), StringComparison.OrdinalIgnoreCase)))
             .ToList();
@@ -97,6 +100,17 @@ public static class SlipBuilder
         }
         steps.Add("No usable market → no bet on this match.");
         return new MatchDecision(match, null, steps);
+    }
+
+    /// <summary>
+    /// The excluded team (from Settings) playing in this match, or null. Whole words, ignoring case and punctuation:
+    /// "Barcelona" also matches "FC Barcelona" and "Barcelona U19".
+    /// </summary>
+    public static string? ExcludedTeam(MatchInfo match, BettingRules rules)
+    {
+        static string N(string s) => System.Text.RegularExpressions.Regex.Replace(s.ToLowerInvariant(), @"[^\p{L}\p{N}]+", " ").Trim();
+        static bool Has(string team, string excluded) => $" {N(team)} ".Contains($" {N(excluded)} ");
+        return rules.ExcludedTeams.FirstOrDefault(x => N(x).Length > 0 && (Has(match.Home, x) || Has(match.Away, x)));
     }
 
     public static string SelectionText(Selection s) =>

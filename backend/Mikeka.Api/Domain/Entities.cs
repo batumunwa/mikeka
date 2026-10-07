@@ -20,9 +20,18 @@ public class Account
     /// <summary>Normal stake for this account; doubled after each consecutive loss, back to this after a win.</summary>
     public decimal BaseStake { get; set; } = 1000;
 
+    /// <summary>Betting stops after this many losses in a row (default from Settings when the account is created).</summary>
+    public int MaxLosses { get; set; } = 4;
+
+    /// <summary>This account's odds ranges (defaults from Settings when the account is created).</summary>
+    public decimal MinPickOdds { get; set; } = 1.10m;
+    public decimal MaxPickOdds { get; set; } = 1.20m;
+    public decimal MinCombinedOdds { get; set; } = 2.10m;
+    public decimal MaxCombinedOdds { get; set; } = 2.20m;
+
     /// <summary>Consecutive lost slips; drives the stake (base, ×2, ×4, ×8).</summary>
     public int LossStreak { get; set; }
-    /// <summary>Set after the stop-loss streak (4 losses). Betting resumes only after a manual reset.</summary>
+    /// <summary>Set after MaxLosses losses in a row. Betting resumes only after a manual reset.</summary>
     public bool Stopped { get; set; }
     public decimal? LastBalance { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -114,6 +123,10 @@ public class BettingSettings
     /// <summary>The slip's combined odds must be within this range.</summary>
     public decimal MinCombinedOdds { get; set; } = 2.10m;
     public decimal MaxCombinedOdds { get; set; } = 2.20m;
+    /// <summary>Default maximum losses in a row for new accounts.</summary>
+    public int MaxLosses { get; set; } = 4;
+    /// <summary>Matches with any of these teams are never picked (all accounts). Matched ignoring case, spaces and punctuation.</summary>
+    public List<string> ExcludedTeams { get; set; } = new();
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
 

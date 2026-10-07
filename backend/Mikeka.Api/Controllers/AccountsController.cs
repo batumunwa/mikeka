@@ -8,7 +8,8 @@ using Mikeka.Api.Services;
 namespace Mikeka.Api.Controllers;
 
 public record AccountDto(int Id, string Name, string Url, string Site, string Username, string Currency, bool IsActive,
-    List<string> Leagues, List<MarketChoice> Markets, int LossStreak, bool Stopped, decimal? LastBalance, decimal NextStake, decimal BaseStake);
+    List<string> Leagues, List<MarketChoice> Markets, int LossStreak, bool Stopped, decimal? LastBalance, decimal NextStake, decimal BaseStake,
+    int MaxLosses, decimal MinPickOdds, decimal MaxPickOdds, decimal MinCombinedOdds, decimal MaxCombinedOdds);
 
 public record SaveAccountRequest(
     [Required] string Name,
@@ -23,13 +24,18 @@ public record SaveAccountRequest(
     /// <summary>Normal stake; doubled after each loss, back to this after a win. Empty = suggested value from config.</summary>
     decimal? BaseStake = null,
     /// <summary>"coldbet" or "1win". Empty = guessed from the URL.</summary>
-    string? Site = null);
+    string? Site = null,
+    /// <summary>Losses in a row that stop betting. Empty = the default from Settings.</summary>
+    int? MaxLosses = null,
+    /// <summary>This account's odds ranges. Empty = the defaults from Settings.</summary>
+    decimal? MinPickOdds = null, decimal? MaxPickOdds = null, decimal? MinCombinedOdds = null, decimal? MaxCombinedOdds = null);
 
 [ApiController, Route("api/accounts")]
 public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.Extensions.Options.IOptions<BettingRules> rules) : ControllerBase
 {
     private AccountDto ToDto(Account a) => new(a.Id, a.Name, a.Url, a.Site, a.Username, a.Currency, a.IsActive,
-        a.Leagues, a.Markets, a.LossStreak, a.Stopped, a.LastBalance, StakeCalculator.NextStake(a), a.BaseStake);
+        a.Leagues, a.Markets, a.LossStreak, a.Stopped, a.LastBalance, StakeCalculator.NextStake(a), a.BaseStake,
+        a.MaxLosses, a.MinPickOdds, a.MaxPickOdds, a.MinCombinedOdds, a.MaxCombinedOdds);
 
     [HttpGet]
     public async Task<IEnumerable<AccountDto>> List() =>
@@ -41,6 +47,10 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
         if (string.IsNullOrWhiteSpace(req.Password)) return ValidationProblem("Password is required.");
         if (IntervalError(req.Markets) is { } intervalError) return ValidationProblem(intervalError);
         if (req.BaseStake is <= 0) return ValidationProblem("Base stake must be more than 0.");
+        var r = rules.Value; // current Settings values are the defaults
+        var odds = (req.MinPickOdds ?? r.MinPickOdds, req.MaxPickOdds ?? r.MaxPickOdds, req.MinCombinedOdds ?? r.MinCombinedOdds, req.MaxCombinedOdds ?? r.MaxCombinedOdds);
+        var maxLosses = req.MaxLosses ?? r.StopAfterLosses;
+        if (LimitsError(odds, maxLosses) is { } limitsError) return ValidationProblem(limitsError);
         var site = string.IsNullOrWhiteSpace(req.Site) ? Bookmaker.SiteBookmakerFactory.GuessSite(req.Url) : req.Site.Trim().ToLowerInvariant();
         if (!Bookmaker.SiteBookmakerFactory.Sites.Contains(site)) return ValidationProblem($"Site must be one of: {string.Join(", ", Bookmaker.SiteBookmakerFactory.Sites)}.");
         var markets = CleanMarkets(req.Markets);
@@ -56,6 +66,8 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
             Leagues = leagues,
             Markets = markets,
             BaseStake = req.BaseStake ?? rules.Value.BaseStake,
+            MaxLosses = maxLosses,
+            MinPickOdds = odds.Item1, MaxPickOdds = odds.Item2, MinCombinedOdds = odds.Item3, MaxCombinedOdds = odds.Item4,
             Site = site,
             PasswordProtected = secrets.Protect(req.Password),
         };
@@ -71,6 +83,9 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
         if (a is null) return NotFound();
         if (IntervalError(req.Markets) is { } intervalError) return ValidationProblem(intervalError);
         if (req.BaseStake is <= 0) return ValidationProblem("Base stake must be more than 0.");
+        var odds = (req.MinPickOdds ?? a.MinPickOdds, req.MaxPickOdds ?? a.MaxPickOdds, req.MinCombinedOdds ?? a.MinCombinedOdds, req.MaxCombinedOdds ?? a.MaxCombinedOdds);
+        var maxLosses = req.MaxLosses ?? a.MaxLosses;
+        if (LimitsError(odds, maxLosses) is { } limitsError) return ValidationProblem(limitsError);
         var site = string.IsNullOrWhiteSpace(req.Site) ? Bookmaker.SiteBookmakerFactory.GuessSite(req.Url) : req.Site.Trim().ToLowerInvariant();
         if (!Bookmaker.SiteBookmakerFactory.Sites.Contains(site)) return ValidationProblem($"Site must be one of: {string.Join(", ", Bookmaker.SiteBookmakerFactory.Sites)}.");
         var markets = CleanMarkets(req.Markets);
@@ -79,6 +94,13 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
             return ValidationProblem($"Add at least one league to the {noLeague.Market} market.");
         var leagues = markets.SelectMany(m => m.Leagues).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         a.Markets = markets;
+        (a.MinPickOdds, a.MaxPickOdds, a.MinCombinedOdds, a.MaxCombinedOdds) = odds;
+        if (maxLosses != a.MaxLosses)
+        {
+            a.MaxLosses = maxLosses;
+            // Raising the limit above the current streak lets a stopped account bet again; lowering it may stop it now.
+            a.Stopped = a.LossStreak >= maxLosses;
+        }
         a.Site = site;
         if (req.BaseStake is { } stake) a.BaseStake = stake;
         (a.Name, a.Url, a.Username, a.Currency, a.IsActive, a.Leagues) = (req.Name, req.Url, req.Username, req.Currency, req.IsActive, leagues);
@@ -112,6 +134,24 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
         db.RunLogs.Add(new RunLog { AccountId = id, Message = $"Account reset by user; stake back to {a.BaseStake:N0} {a.Currency}." });
         await db.SaveChangesAsync();
         return ToDto(a);
+    }
+
+    /// <summary>
+    /// Overall balance over time, oldest first: after each recorded change, the sum of every account's latest balance.
+    /// </summary>
+    [HttpGet("balance-history")]
+    public async Task<IActionResult> TotalBalanceHistory(CancellationToken ct)
+    {
+        var entries = await db.BalanceHistory.AsNoTracking().OrderBy(b => b.At).ThenBy(b => b.Id)
+            .Select(b => new { b.AccountId, b.At, b.Balance }).ToListAsync(ct);
+        var latest = new Dictionary<int, decimal>();
+        var points = new List<object>();
+        foreach (var e in entries)
+        {
+            latest[e.AccountId] = e.Balance;
+            points.Add(new { e.At, Balance = latest.Values.Sum(), e.AccountId });
+        }
+        return Ok(points);
     }
 
     /// <summary>The account's balance over time, oldest first.</summary>
@@ -210,6 +250,10 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
             .Where(m => rules.Value.SupportedMarkets.Contains(m.Market) && m.Side.Length > 0)
             .DistinctBy(m => (m.Market, m.Side, m.IntervalKey, m.Line, string.Join("|", m.Leagues.Order(StringComparer.OrdinalIgnoreCase)).ToLowerInvariant()))
             .ToList();
+
+    private string? LimitsError((decimal minPick, decimal maxPick, decimal minCombined, decimal maxCombined) o, int maxLosses) =>
+        maxLosses < 1 ? "Maximum losses must be at least 1."
+        : BettingRules.OddsError(o.minPick, o.maxPick, o.minCombined, o.maxCombined, rules.Value.MaxMatches);
 
     /// <summary>An interval needs both start and end, start before end, within minutes 1–90.</summary>
     private static string? IntervalError(IEnumerable<MarketChoice>? markets)

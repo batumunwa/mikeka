@@ -16,8 +16,12 @@ public class BettingRules
     public static readonly string[] Sides = ["Under"];
     /// <summary>The (market, side) pairs the slip builder may use. Set per account with <see cref="ForAccount"/>.</summary>
     public List<Domain.MarketChoice> Markets { get; set; } = [];
-    public int AlertAfterLosses { get; set; } = 3;
+    /// <summary>Losses in a row that stop betting; set per account (Account.MaxLosses) by <see cref="ForAccount"/>.</summary>
     public int StopAfterLosses { get; set; } = 4;
+    /// <summary>An alert email goes out one loss before the stop.</summary>
+    public int AlertAfterLosses => StopAfterLosses - 1;
+    /// <summary>Teams never bet on (Settings page, all accounts).</summary>
+    public List<string> ExcludedTeams { get; set; } = [];
     /// <summary>Spread matches over up to this many days when today cannot reach the odds.</summary>
     public int MaxDaysAhead { get; set; } = 3;
     /// <summary>Daily generation time in East Africa Time.</summary>
@@ -43,11 +47,28 @@ public class BettingRules
         return copy;
     }
 
-    /// <summary>A copy of these rules using the markets and sides the account chose.</summary>
+    /// <summary>Checks a set of odds ranges; returns the problem in plain words, or null if they are usable.</summary>
+    public static string? OddsError(decimal minPick, decimal maxPick, decimal minCombined, decimal maxCombined, int maxMatches)
+    {
+        if (minPick < 1.01m) return "Minimum pick odds must be at least 1.01.";
+        if (maxPick <= minPick) return "Maximum pick odds must be higher than the minimum.";
+        if (maxCombined <= minCombined) return "Maximum combined odds must be higher than the minimum.";
+        if (minCombined < minPick) return "Minimum combined odds can't be below the minimum pick odds.";
+        var best = (decimal)Math.Pow((double)maxPick, maxMatches);
+        if (best < minCombined)
+            return $"With picks up to {maxPick:0.00} and at most {maxMatches} matches, the best slip is {best:0.00}, " +
+                   $"so {minCombined:0.00} can never be reached.";
+        return null;
+    }
+
+    /// <summary>A copy of these rules using the markets and sides the account chose, its odds ranges and maximum losses.</summary>
     public BettingRules ForAccount(Domain.Account account)
     {
         var copy = (BettingRules)MemberwiseClone();
         copy.Markets = account.Markets.Where(m => SupportedMarkets.Contains(m.Market, StringComparer.OrdinalIgnoreCase)).ToList();
+        (copy.MinPickOdds, copy.MaxPickOdds) = (account.MinPickOdds, account.MaxPickOdds);
+        (copy.MinCombinedOdds, copy.MaxCombinedOdds) = (account.MinCombinedOdds, account.MaxCombinedOdds);
+        copy.StopAfterLosses = account.MaxLosses;
         return copy;
     }
 }

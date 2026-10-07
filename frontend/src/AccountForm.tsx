@@ -47,7 +47,6 @@ interface Props {
 }
 
 export function AccountForm({ settings, account, onSaved, onCancel }: Props) {
-  const pickRange = settings ? `${settings.minPickOdds.toFixed(2)}–${settings.maxPickOdds.toFixed(2)}` : 'in the set range'
   const [form, setForm] = useState<SaveAccount>({
     name: account?.name ?? '',
     url: account?.url ?? SITE_URLS['1win'],
@@ -57,11 +56,29 @@ export function AccountForm({ settings, account, onSaved, onCancel }: Props) {
     markets: account?.markets?.length ? account.markets : [{ market: 'corners', side: 'Under', leagues: [] }],
     currency: account?.currency ?? 'TZS',
     baseStake: account?.baseStake ?? 1000,
+    // A new account starts from the Settings values; each account can then have its own.
+    maxLosses: account?.maxLosses ?? settings?.maxLosses ?? 4,
+    minPickOdds: account?.minPickOdds ?? settings?.minPickOdds ?? 1.1,
+    maxPickOdds: account?.maxPickOdds ?? settings?.maxPickOdds ?? 1.2,
+    minCombinedOdds: account?.minCombinedOdds ?? settings?.minCombinedOdds ?? 2.1,
+    maxCombinedOdds: account?.maxCombinedOdds ?? settings?.maxCombinedOdds ?? 2.2,
     isActive: account?.isActive ?? true,
   })
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
+  const pickRange = form.minPickOdds && form.maxPickOdds ? `${form.minPickOdds.toFixed(2)}–${form.maxPickOdds.toFixed(2)}` : 'in the set range'
+  const maxMatches = settings?.maxMatches ?? 6
+  const best = Math.pow(form.maxPickOdds || 0, maxMatches)
+
+  // Settings may arrive after the form opened: a new account then takes their values.
+  useEffect(() => {
+    if (account || !settings) return
+    setForm((f) => ({
+      ...f, maxLosses: settings.maxLosses, minPickOdds: settings.minPickOdds, maxPickOdds: settings.maxPickOdds,
+      minCombinedOdds: settings.minCombinedOdds, maxCombinedOdds: settings.maxCombinedOdds,
+    }))
+  }, [account, settings])
 
   // Editing: put the saved password in the box (hidden until Show) so it can be checked.
   useEffect(() => {
@@ -88,6 +105,9 @@ export function AccountForm({ settings, account, onSaved, onCancel }: Props) {
     const noLeague = form.markets.findIndex((m) => m.leagues.length === 0)
     if (noLeague >= 0) return setError(`Add at least one league to the ${ordinal(noLeague + 1)} market.`)
     if (!(form.baseStake > 0)) return setError('Base stake must be more than 0.')
+    if (!(form.maxLosses >= 1)) return setError('Maximum losses must be at least 1.')
+    if (!(form.maxPickOdds > form.minPickOdds)) return setError('Maximum pick odds must be higher than the minimum.')
+    if (!(form.maxCombinedOdds > form.minCombinedOdds)) return setError('Maximum combined odds must be higher than the minimum.')
     if (!account && !form.password) return setError('Password is required.')
     setSaving(true)
     setError(null)
@@ -101,9 +121,17 @@ export function AccountForm({ settings, account, onSaved, onCancel }: Props) {
     }
   }
 
+  const oddsInput = (k: 'minPickOdds' | 'maxPickOdds' | 'minCombinedOdds' | 'maxCombinedOdds', label: string) => (
+    <label>
+      {label}
+      <input type="number" step="0.01" min="1.01" value={form[k] || ''} required
+        onChange={(e) => set(k, e.target.value === '' ? 0 : +e.target.value)} />
+    </label>
+  )
+
   return (
     <Modal title={account ? `Edit ${account.name}` : 'Register account'} width={820} dismissable={false} onClose={onCancel}
-      subtitle="Login, markets in order, leagues and stake"
+      subtitle="Login, markets in order, leagues, stake and limits"
       footer={<>
         {error && <p className="error foot-error">{error}</p>}
         <button type="button" className="ghost" onClick={onCancel}>Cancel</button>
@@ -229,10 +257,35 @@ export function AccountForm({ settings, account, onSaved, onCancel }: Props) {
           <input type="number" min="1" step="any" value={form.baseStake || ''} required
             onChange={(e) => set('baseStake', +e.target.value)} />
           <span className="muted small">
-            Doubles after each loss: {[1, 2, 4, 8].map((k) => ((form.baseStake || 0) * k).toLocaleString()).join(' → ')}; back to {(form.baseStake || 0).toLocaleString()} after a win.
+            Doubles after each loss: {Array.from({ length: Math.min(Math.max(form.maxLosses || 1, 1), 8) }, (_, k) => ((form.baseStake || 0) * 2 ** k).toLocaleString()).join(' → ')}; back to {(form.baseStake || 0).toLocaleString()} after a win.
           </span>
         </label>
+        <label>
+          Maximum losses in a row
+          <input type="number" min="1" step="1" value={form.maxLosses || ''} required
+            onChange={(e) => set('maxLosses', +e.target.value)} />
+          <span className="muted small">Betting stops after {form.maxLosses || '?'} lost slips in a row; an email warns one loss before.</span>
+        </label>
       </div>
+      <fieldset className="limits">
+        <legend>Odds per pick</legend>
+        <div className="row2">
+          {oddsInput('minPickOdds', 'Minimum')}
+          {oddsInput('maxPickOdds', 'Maximum')}
+        </div>
+      </fieldset>
+      <fieldset className="limits">
+        <legend>Combined odds of the slip</legend>
+        <div className="row2">
+          {oddsInput('minCombinedOdds', 'Minimum')}
+          {oddsInput('maxCombinedOdds', 'Maximum')}
+        </div>
+        <p className="muted small">
+          Up to {maxMatches} picks. With picks up to {(form.maxPickOdds || 0).toFixed(2)}, the highest possible slip is {best.toFixed(2)}
+          {best < form.minCombinedOdds && <b className="neg"> — below the minimum, so no slip could ever be built.</b>}
+          {!account && <> New accounts start with the values from Settings.</>}
+        </p>
+      </fieldset>
       <div className="row2">
         <label>
           Currency
