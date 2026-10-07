@@ -107,11 +107,12 @@ public sealed class OneWinClient(
     public async Task LoginAsync(CancellationToken ct)
     {
         var page = await Page();
+        // Start clean: an earlier account's leftovers make 1win refuse the next login until the browser data is cleared.
+        await ClearSiteDataAsync(page);
         await Step("open site", () => page.OpenAsync(At("/betting"), log));
         await Step("login", async () =>
         {
-            // 1win keeps its login beyond cookies (clearing cookies and page storage does not log it out, seen 2026-10-06), so
-            // a session from an earlier run is still there. With one 1win account per PC that session is this account's.
+            // After the clearing above no earlier session should be left; if one is, it is a login made by hand just now.
             var loginButton = page.Locator(o.LoginButton).First;
             if (!await IsVisible(loginButton, 30_000))
             {
@@ -556,8 +557,37 @@ public sealed class OneWinClient(
     public async ValueTask DisposeAsync()
     {
         // Log out at the end of a run (bet placed, nothing to bet, or an error), unless a filled bet slip waits for the user.
-        if (!browserTab.LeaveOpen) await LogoutAsync();
+        if (!browserTab.LeaveOpen && _page is { IsClosed: false } page)
+        {
+            await LogoutAsync();
+            await ClearSiteDataAsync(page); // so the next 1win account can log in (also ends a session the logout missed)
+        }
         await browserTab.DisposeAsync(); // the site's tab stays open for the next run (with the filled bet slip, if any)
+    }
+
+    /// <summary>
+    /// Wipes what Chrome keeps for 1win only: its cookies (site and sub-domains), local/session storage, IndexedDB, service
+    /// workers and cache storage, plus Chrome's HTTP cache (cache only — other sites stay logged in). Without this a second
+    /// 1win account cannot log in after the first one logged out, until the browser cache is cleared by hand (seen 2026-10-07).
+    /// </summary>
+    private async Task ClearSiteDataAsync(IPage page)
+    {
+        var labels = _origin.Host.Split('.');
+        var baseDomain = string.Join('.', labels.Skip(Math.Max(0, labels.Length - 2))); // 1wnorh.life
+        try
+        {
+            var cdp = await page.Context.NewCDPSessionAsync(page);
+            foreach (var origin in new[] { $"https://{baseDomain}", $"https://www.{baseDomain}", _origin.GetLeftPart(UriPartial.Authority) }.Distinct())
+                await cdp.SendAsync("Storage.clearDataForOrigin", new Dictionary<string, object> { ["origin"] = origin, ["storageTypes"] = "all" });
+            await cdp.SendAsync("Network.clearBrowserCache");
+            await cdp.DetachAsync();
+            await page.Context.ClearCookiesAsync(new() { DomainRegex = new Regex(Regex.Escape(baseDomain) + "$", RegexOptions.IgnoreCase) });
+            log.LogInformation("1win: site data cleared for {Domain}", baseDomain);
+        }
+        catch (Exception ex) when (ex is PlaywrightException or TimeoutException)
+        {
+            log.LogWarning("1win: clearing site data failed: {Error}", ex.Message.Split('\n')[0]);
+        }
     }
 
     /// <summary>
