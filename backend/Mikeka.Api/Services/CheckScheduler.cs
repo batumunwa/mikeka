@@ -66,9 +66,11 @@ public class CheckScheduler(IServiceScopeFactory scopes, IOptions<BettingRules> 
             var db = scope.ServiceProvider.GetRequiredService<MikekaDb>();
             db.ChangeTracker.Clear();
             db.RunLogs.Add(new Domain.RunLog { AccountId = accountId, Level = "Error", Message = ex.Message });
-            // Try again after the normal interval rather than every minute.
+            // Try again after the normal interval rather than every minute; soon when a chosen slip waits to be placed
+            // (e.g. the login failed): that run continues with it.
+            var retry = PreparedSlips.Get(accountId) is not null ? PreparedSlips.RetryMinutes : rules.Value.CheckIntervalMinutes;
             if (await db.Accounts.FindAsync([accountId], ct) is { } account)
-                account.NextCheckAt = clock.GetUtcNow().UtcDateTime.AddMinutes(rules.Value.CheckIntervalMinutes);
+                account.NextCheckAt = clock.GetUtcNow().UtcDateTime.AddMinutes(retry);
             await db.SaveChangesAsync(ct);
         }
         finally

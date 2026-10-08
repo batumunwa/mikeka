@@ -98,28 +98,49 @@ public class BettingEngine(
         var stake = StakeCalculator.NextStake(account);
         var endOfToday = TimeZoneInfo.ConvertTimeToUtc(today.AddDays(1).ToDateTime(TimeOnly.MinValue), Eat.Zone);
         var accountRules = _rules.ForAccount(account);
-        var matches = await client.GetMatchesAsync(account.Leagues, account.Markets, endOfToday.AddDays(_rules.MaxDaysAhead - 1), ct);
-        matches = SlipBuilder.InLeagues(matches, account.Leagues).Where(m => m.Kickoff > clock.GetUtcNow().UtcDateTime).ToList();
-        if (!matches.Any(m => m.Selections.Any(x => accountRules.Markets.Any(c => c.Market == x.Market && c.Side == x.Side))))
-            return await Done(account, "NoMatches",
-                $"No matches offering {Describe(account)} in {string.Join(", ", account.Leagues)} in the next {_rules.MaxDaysAhead} days. Next check in {_rules.CheckIntervalMinutes} min.");
 
+        // A slip chosen by an earlier run that could not place it (login failed, …): continue with it while every match is
+        // still to start and the stake is unchanged, instead of reading all the leagues again.
         SlipPlan? plan = null;
-        for (int d = 0; d < _rules.MaxDaysAhead && plan is null; d++)
+        if (PreparedSlips.Get(account.Id) is { } prepared)
         {
-            plan = SlipBuilder.Build(matches.Where(m => m.Kickoff < endOfToday.AddDays(d)), accountRules);
-            if (plan is not null)
-                await Log(account, d == 0 ? "Slip built from today's matches." : $"Today's matches were not enough; slip built with matches up to {today.AddDays(d):dd/MM}.");
+            var firstKickoff = prepared.Plan.Picks.Min(p => p.Match.Kickoff);
+            if (prepared.Stake == stake && prepared.Reuses < PreparedSlips.MaxReuses && firstKickoff > nowUtc.AddMinutes(5))
+            {
+                plan = prepared.Plan;
+                PreparedSlips.Save(account.Id, prepared with { Reuses = prepared.Reuses + 1 });
+                await Log(account, $"Continuing with the slip chosen at {EatTime(prepared.ChosenAtUtc):dd/MM HH:mm} EAT " +
+                                   $"({plan.Picks.Count} picks @ {plan.CombinedOdds}); matches not read again.");
+            }
+            else PreparedSlips.Remove(account.Id);
         }
         if (plan is null)
-            return await Done(account, "NoSlip",
-                $"No combination of up to {accountRules.MaxMatches} picks at {accountRules.MinPickOdds}–{accountRules.MaxPickOdds} reaches " +
-                $"{accountRules.MinCombinedOdds}–{accountRules.MaxCombinedOdds} within {_rules.MaxDaysAhead} days in {string.Join(", ", account.Leagues)}. " +
-                $"Next check in {_rules.CheckIntervalMinutes} min.");
+        {
+            var matches = await client.GetMatchesAsync(account.Leagues, account.Markets, endOfToday.AddDays(_rules.MaxDaysAhead - 1), ct);
+            matches = SlipBuilder.InLeagues(matches, account.Leagues).Where(m => m.Kickoff > clock.GetUtcNow().UtcDateTime).ToList();
+            if (!matches.Any(m => m.Selections.Any(x => accountRules.Markets.Any(c => c.Market == x.Market && c.Side == x.Side))))
+                return await Done(account, "NoMatches",
+                    $"No matches offering {Describe(account)} in {string.Join(", ", account.Leagues)} in the next {_rules.MaxDaysAhead} days. Next check in {_rules.CheckIntervalMinutes} min.");
 
-        // Last guard: never send two selections of one match to a site (sites refuse them in one accumulator).
-        if (plan.Picks.GroupBy(p => SlipBuilder.MatchKey(p.Match)).FirstOrDefault(g => g.Count() > 1) is { } twice)
-            return await Done(account, "NotFilled", $"The slip has {twice.First().Match.Home} v {twice.First().Match.Away} twice; nothing was sent to {account.Site}.");
+            for (int d = 0; d < _rules.MaxDaysAhead && plan is null; d++)
+            {
+                plan = SlipBuilder.Build(matches.Where(m => m.Kickoff < endOfToday.AddDays(d)), accountRules);
+                if (plan is not null)
+                    await Log(account, d == 0 ? "Slip built from today's matches." : $"Today's matches were not enough; slip built with matches up to {today.AddDays(d):dd/MM}.");
+            }
+            if (plan is null)
+                return await Done(account, "NoSlip",
+                    $"No combination of up to {accountRules.MaxMatches} picks at {accountRules.MinPickOdds}–{accountRules.MaxPickOdds} reaches " +
+                    $"{accountRules.MinCombinedOdds}–{accountRules.MaxCombinedOdds} within {_rules.MaxDaysAhead} days in {string.Join(", ", account.Leagues)}. " +
+                    $"Next check in {_rules.CheckIntervalMinutes} min.");
+
+            // Last guard: never send two selections of one match to a site (sites refuse them in one accumulator).
+            if (plan.Picks.GroupBy(p => SlipBuilder.MatchKey(p.Match)).FirstOrDefault(g => g.Count() > 1) is { } twice)
+                return await Done(account, "NotFilled", $"The slip has {twice.First().Match.Home} v {twice.First().Match.Away} twice; nothing was sent to {account.Site}.");
+
+            // Kept until placed: if the login or the placing fails, the next run continues from here.
+            PreparedSlips.Save(account.Id, new PreparedSlips.Prepared(plan, stake, nowUtc, 0));
+        }
 
         // 3) A slip is possible: log in only now, for the balance and the bet.
         if (!loggedIn) { await client.LoginAsync(ct); loggedIn = true; }
@@ -196,7 +217,9 @@ public class BettingEngine(
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                return await Done(account, "NotPlaced", $"Slip not placed: {ex.Message}");
+                // The chosen slip is kept: try it again soon rather than after the full check interval.
+                account.NextCheckAt = nowUtc.AddMinutes(PreparedSlips.RetryMinutes);
+                return await Done(account, "NotPlaced", $"Slip not placed: {ex.Message} Trying the same slip again in {PreparedSlips.RetryMinutes} min.");
             }
             newSlip.Status = SlipStatus.Pending;
         }
@@ -205,6 +228,7 @@ public class BettingEngine(
         if (newSlip.Status == SlipStatus.Pending && newSlip.SettlementChecks.Count > 0)
             account.NextCheckAt = newSlip.SettlementChecks[0];
         await db.SaveChangesAsync(ct);
+        PreparedSlips.Remove(account.Id); // used: the next slip is chosen afresh
         await excel.WriteFileAsync(ct);
 
         if (filledOnly)
