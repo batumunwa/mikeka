@@ -214,12 +214,32 @@ public sealed class SharedBrowser(IOptions<BrowserOptions> options, IServiceScop
             ?? throw new InvalidOperationException("Google Chrome not found. Set Browser:ChromePath in appsettings to chrome.exe.");
         var port = new Uri(o.CdpUrl).Port;
         Directory.CreateDirectory(o.ProfileDir);
-        Process.Start(new ProcessStartInfo(exe)
-        {
-            Arguments = $"--remote-debugging-port={port} --user-data-dir=\"{o.ProfileDir}\" --no-first-run --no-default-browser-check",
-            UseShellExecute = false,
-        });
+        var args = $"--remote-debugging-port={port} --user-data-dir=\"{o.ProfileDir}\" --no-first-run --no-default-browser-check";
+        // Started through WMI, Chrome is not the API's child: stopping the API (or the window/job it runs in) never closes
+        // Chrome, so 1win's "verified human" state survives restarts (user's request 2026-10-08).
+        if (!OperatingSystem.IsWindows() || !StartOutsideApi(exe, args))
+            Process.Start(new ProcessStartInfo(exe) { Arguments = args, UseShellExecute = false });
         log.LogInformation("Started Chrome with remote debugging on port {Port} (profile {Dir})", port, o.ProfileDir);
+    }
+
+    private bool StartOutsideApi(string exe, string args)
+    {
+        try
+        {
+            var commandLine = $"\"{exe}\" {args}".Replace("'", "''");
+            var script = $"$ProgressPreference='SilentlyContinue'; (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine='{commandLine}'}}).ReturnValue";
+            using var ps = Process.Start(new ProcessStartInfo("powershell.exe")
+            {
+                Arguments = "-NoProfile -NonInteractive -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script)),
+                UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true,
+            })!;
+            var output = ps.StandardOutput.ReadToEnd().Trim();
+            ps.WaitForExit(30_000);
+            if (output.Split('\n').Any(l => l.Trim() == "0")) return true;
+            log.LogWarning("Starting Chrome through WMI returned {Code}; starting it directly", output);
+        }
+        catch (Exception ex) { log.LogWarning("Starting Chrome through WMI failed: {Error}; starting it directly", ex.Message); }
+        return false;
     }
 
     private static string? FindChrome() => new[]
