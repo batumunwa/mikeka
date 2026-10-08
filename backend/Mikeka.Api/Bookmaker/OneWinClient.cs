@@ -541,6 +541,12 @@ public sealed class OneWinClient(
     public async Task<BetOutcome> GetOutcomeAsync(Slip slip, CancellationToken ct)
     {
         var page = await Page();
+        // The history cards show no team names ("5 events"): match by placing time, odds and number of picks first.
+        if (await FindByTimeAndOddsAsync(page, slip) is { } byCard)
+        {
+            log.LogInformation("1win: slip #{Id} in history → {Outcome}: {Text}", slip.Id, byCard.outcome, byCard.text);
+            return byCard.outcome;
+        }
         var found = await BetHistory.ReadAsync(page, At, o.HistoryPaths, o.HistoryLinkRegex, slip, log);
         if (found is null)
         {
@@ -550,6 +556,72 @@ public sealed class OneWinClient(
         }
         log.LogInformation("1win: slip #{Id} in history → {Outcome}: {Text}", slip.Id, found.Value.outcome, found.Value.text);
         return found.Value.outcome;
+    }
+
+    /// <summary>
+    /// Each card on 1win's Bet history page (seen 2026-10-08), e.g.
+    /// "7 October 2026 at 09:26 am ID 330497469 Opened • Multiple 1.81 5 events Bet / Possible win TZS 1,000.00 » TZS 1,866.70".
+    /// The smallest element holding both the date line and "Bet /" is one card.
+    /// </summary>
+    private const string HistoryCardsScript = @"async () => {
+        for (let i = 0; i < 3; i++) { window.scrollBy(0, window.innerHeight); await new Promise(r => setTimeout(r, 700)); }
+        window.scrollTo(0, 0);
+        const isCard = el => /\d{1,2} [A-Za-z]+ \d{4} at \d{1,2}:\d{2}\s*[ap]m/i.test(el.innerText || '') && /Bet\s*\//.test(el.innerText || '');
+        const all = [...document.body.querySelectorAll('*')].filter(el => el.offsetParent !== null && isCard(el));
+        return all.filter(el => ![...el.querySelectorAll('*')].some(c => all.includes(c))).map(el => el.innerText.replace(/\s+/g, ' ').trim());
+    }";
+
+    private static readonly Regex CardRegex = new(
+        @"(?<date>\d{1,2} [A-Za-z]+ \d{4}) at (?<time>\d{1,2}:\d{2}\s*[ap]m).*?\bID \d+\s+(?<status>[A-Za-z ]+?)\s*•.*?(?<odds>\d+(\.\d+)?)\s+(?<events>\d+) events?",
+        RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// The slip's card: placed within 3 minutes of the slip's bet time (the "1win-yyyyMMdd-HHmmss" reference, UTC), same
+    /// number of picks, odds within 0.02. Its first word gives the result: Lost / Opened / Won.
+    /// </summary>
+    private async Task<(BetOutcome outcome, string text)?> FindByTimeAndOddsAsync(IPage page, Slip slip)
+    {
+        var placedUtc = DateTime.TryParseExact(slip.BetReference?.Replace("1win-", ""), "yyyyMMdd-HHmmss", CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var r) ? r : slip.CreatedAt;
+        var placedEat = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(placedUtc, DateTimeKind.Utc), Eat.Zone);
+        foreach (var path in o.HistoryPaths)
+        {
+            string[] cards = [];
+            try
+            {
+                await page.OpenAsync(At(path), log);
+                await page.WaitForTimeoutAsync(3_000);
+                for (int attempt = 1; ; attempt++)
+                {
+                    try { cards = await page.EvaluateAsync<string[]>(HistoryCardsScript); break; }
+                    catch (PlaywrightException ex) when (attempt < 3 && ex.Message.Contains("context was destroyed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await page.WaitForTimeoutAsync(3_000);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is PlaywrightException or TimeoutException)
+            {
+                log.LogWarning("1win: bet history not read at {Path}: {Error}", path, ex.Message.Split('\n')[0]);
+                continue;
+            }
+            foreach (var card in cards)
+            {
+                var m = CardRegex.Match(card);
+                if (!m.Success) continue;
+                if (!DateTime.TryParseExact($"{m.Groups["date"].Value} {m.Groups["time"].Value.Replace(" ", "")}", "d MMMM yyyy h:mmtt",
+                        CultureInfo.InvariantCulture, DateTimeStyles.None, out var cardTime)) continue;
+                if (Math.Abs((cardTime - placedEat).TotalMinutes) > 3) continue;
+                if (int.Parse(m.Groups["events"].Value) != slip.Picks.Count) continue;
+                if (Math.Abs(decimal.Parse(m.Groups["odds"].Value, CultureInfo.InvariantCulture) - slip.CombinedOdds) > 0.02m) continue;
+                var status = m.Groups["status"].Value.Trim().ToLowerInvariant();
+                var outcome = status.StartsWith("lost") ? BetOutcome.Lost
+                    : status.StartsWith("won") || status.StartsWith("return") || status.StartsWith("cashed") ? BetOutcome.Won
+                    : BetOutcome.Pending; // Opened (and anything unknown) = still running
+                return (outcome, card);
+            }
+        }
+        return null;
     }
 
     // ---------- helpers ----------
