@@ -114,6 +114,7 @@ public sealed class OneWinClient(
         var page = await Page();
         // Start clean: an earlier account's leftovers make 1win refuse the next login until the browser data is cleared.
         await ClearSiteDataAsync(page);
+        await ClearHistoryAsync(page);
         await Step("open site", () => page.OpenAsync(At("/betting"), log));
         await Step("login", async () =>
         {
@@ -690,6 +691,57 @@ public sealed class OneWinClient(
         catch (Exception ex) when (ex is PlaywrightException or TimeoutException or System.TimeoutException)
         {
             log.LogWarning("1win: clearing site data failed: {Error}", ex.Message.Split('\n')[0]);
+        }
+    }
+
+    /// <summary>
+    /// Deletes Chrome's history entries for 1win (only those: the match pages read while choosing the slip, …) before
+    /// logging in, as the user asked (2026-10-08). Done in a second tab on Chrome's History page with the page's own
+    /// "select all" + "delete" (the same as clicking them), page by page; the tab is closed afterwards. Entries of any
+    /// other site are never touched: if one is listed, it stops. A failure only writes a warning; the login goes on.
+    /// </summary>
+    private const string DeleteHistoryScript = @"async domain => {
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+        const app = document.querySelector('history-app');
+        const list = () => app.shadowRoot.querySelector('history-list');
+        const shown = () => [...list().shadowRoot.querySelectorAll('history-item')].filter(i => i.item);
+        let removed = 0;
+        for (let round = 0; round < 30; round++) {
+            await sleep(1500);
+            const all = shown();
+            if (all.length === 0) break;
+            if (all.some(i => !new URL(i.item.url).hostname.endsWith(domain))) return 'stopped (another site listed) after ' + removed;
+            list().selectAllItems();
+            list().deleteSelectedWithPrompt();
+            await sleep(800);
+            const ok = list().shadowRoot.querySelector('cr-dialog .action-button');
+            if (!ok) return 'no confirm button after ' + removed;
+            ok.click();
+            removed += all.length;
+        }
+        return 'removed ' + removed;
+    }";
+
+    private async Task ClearHistoryAsync(IPage page)
+    {
+        var labels = _origin.Host.Split('.');
+        var baseDomain = string.Join('.', labels.Skip(Math.Max(0, labels.Length - 2))); // 1wnorh.life
+        IPage? historyTab = null;
+        try
+        {
+            historyTab = await page.Context.NewPageAsync();
+            await historyTab.GotoAsync($"chrome://history/?q={Uri.EscapeDataString(baseDomain)}", new() { Timeout = 20_000 });
+            var result = await historyTab.EvaluateAsync<string>(DeleteHistoryScript, baseDomain).WaitAsync(TimeSpan.FromMinutes(2));
+            log.LogInformation("1win: browser history for {Domain}: {Result}", baseDomain, result);
+        }
+        catch (Exception ex) when (ex is PlaywrightException or TimeoutException or System.TimeoutException)
+        {
+            log.LogWarning("1win: clearing browser history failed: {Error}", ex.Message.Split('\n')[0]);
+        }
+        finally
+        {
+            try { if (historyTab is { IsClosed: false }) await historyTab.CloseAsync(); } catch (PlaywrightException) { }
+            try { await page.BringToFrontAsync(); } catch (PlaywrightException) { }
         }
     }
 
