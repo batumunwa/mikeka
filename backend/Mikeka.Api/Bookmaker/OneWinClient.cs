@@ -27,7 +27,7 @@ public class OneWinOptions
 {
     public string DebugDir { get; set; } = "logs/1win-debug";
     /// <summary>Bet-history pages tried in turn to read a slip's result (not seen on the live site yet: check the first run).</summary>
-    public string[] HistoryPaths { get; set; } = ["/bets-history", "/bets/history", "/profile/bets-history"];
+    public string[] HistoryPaths { get; set; } = ["/betting/bets-history"]; // the Sports page's "Bet history" tab (seen 2026-10-08)
     /// <summary>Menu link to the bet history, clicked when no path shows the bet.</summary>
     public string HistoryLinkRegex { get; set; } = @"^\s*(my bets|bet history|bets history|betting history|history)\s*$";
     public string FootballPath { get; set; } = "/betting/prematch/football-18";

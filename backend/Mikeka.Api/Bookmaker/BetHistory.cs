@@ -92,7 +92,18 @@ public static class BetHistory
 
     private static async Task<(BetOutcome, string)?> FindAsync(IPage page, string[] teams)
     {
-        var cards = await page.EvaluateAsync<string[]>(FindCardsScript, teams);
+        string[] cards = [];
+        // The page may still redirect or reload while it is read ("Execution context was destroyed", 1win 2026-10-08): try again.
+        for (int attempt = 1; ; attempt++)
+        {
+            try { cards = await page.EvaluateAsync<string[]>(FindCardsScript, teams); break; }
+            catch (PlaywrightException ex) when (attempt < 3 && ex.Message.Contains("context was destroyed", StringComparison.OrdinalIgnoreCase))
+            {
+                try { await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded, new() { Timeout = 15_000 }); }
+                catch (TimeoutException) { }
+                await page.WaitForTimeoutAsync(3_000);
+            }
+        }
         if (cards.Length == 0) return null;
         var text = cards[0]; // newest first on the history pages
         return (Classify(text), text);
