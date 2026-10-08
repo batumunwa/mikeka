@@ -605,15 +605,17 @@ public sealed class OneWinClient(
         var baseDomain = string.Join('.', labels.Skip(Math.Max(0, labels.Length - 2))); // 1wnorh.life
         try
         {
-            var cdp = await page.Context.NewCDPSessionAsync(page);
+            // CDP calls have no timeout of their own: one that never answered (seen 2026-10-08) held the 1win tab for every account.
+            var limit = TimeSpan.FromSeconds(20);
+            var cdp = await page.Context.NewCDPSessionAsync(page).WaitAsync(limit);
             foreach (var origin in new[] { $"https://{baseDomain}", $"https://www.{baseDomain}", _origin.GetLeftPart(UriPartial.Authority) }.Distinct())
-                await cdp.SendAsync("Storage.clearDataForOrigin", new Dictionary<string, object> { ["origin"] = origin, ["storageTypes"] = "all" });
-            await cdp.SendAsync("Network.clearBrowserCache");
-            await cdp.DetachAsync();
+                await cdp.SendAsync("Storage.clearDataForOrigin", new Dictionary<string, object> { ["origin"] = origin, ["storageTypes"] = "all" }).WaitAsync(limit);
+            await cdp.SendAsync("Network.clearBrowserCache").WaitAsync(limit);
+            await cdp.DetachAsync().WaitAsync(limit);
             await page.Context.ClearCookiesAsync(new() { DomainRegex = new Regex(Regex.Escape(baseDomain) + "$", RegexOptions.IgnoreCase) });
             log.LogInformation("1win: site data cleared for {Domain}", baseDomain);
         }
-        catch (Exception ex) when (ex is PlaywrightException or TimeoutException)
+        catch (Exception ex) when (ex is PlaywrightException or TimeoutException or System.TimeoutException)
         {
             log.LogWarning("1win: clearing site data failed: {Error}", ex.Message.Split('\n')[0]);
         }
