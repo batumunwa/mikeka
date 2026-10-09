@@ -407,6 +407,21 @@ public sealed class OneWinClient(
                     $"'Place a bet' was clicked ({picks.Count} picks, stake {stake:N0}) but neither a bet number nor a lower balance showed within " +
                     $"{o.ConfirmationWaitSeconds}s (screenshot: {shot}). Check 'Bet history' on 1win.");
             browserTab.LeaveOpen = false; // placed: nothing left in the slip for the user
+            // The card in Bet history carries 1win's own bet ID: kept as the bet number, so the result is read from exactly that card.
+            var combined = picks.Aggregate(1m, (acc, p) => acc * p.Odds);
+            try
+            {
+                if (await FindCardAsync(page, DateTime.UtcNow, picks.Count, combined, 0.05m) is { } card)
+                {
+                    log.LogInformation("1win: placed bet has ID {BetId} in Bet history: {Text}", card.Id, card.Text);
+                    id = card.Id;
+                }
+                else log.LogWarning("1win: placed bet not found in Bet history yet; kept {Ref} (matched by time and odds later)", id);
+            }
+            catch (Exception ex) // the bet is placed: a failed lookup must never make it "unconfirmed"
+            {
+                log.LogWarning("1win: Bet history not read after placing ({Error}); kept {Ref}", ex.Message.Split('\n')[0], id);
+            }
             log.LogInformation("1win: placed bet {Id} for {User}: {Count} picks, stake {Stake}", id, account.Username, picks.Count, stake);
             return id;
         }
@@ -536,28 +551,53 @@ public sealed class OneWinClient(
     }";
 
     /// <summary>
-    /// 1win gives no bet number, so the bet is found on the bet-history page by its teams (<see cref="BetHistory"/>).
-    /// Not found = Pending, with a "history-not-found" screenshot to correct <c>HistoryPaths</c>.
+    /// The slip's card on 1win's Bet history page. A slip placed since 2026-10-09 has 1win's bet ID as its bet number:
+    /// exactly that card is read. Older slips ("1win-yyyyMMdd-HHmmss") are matched by placing time, picks and odds, and
+    /// only when exactly ONE card fits (two fitting cards = no guess, Pending); the card's ID is then kept on the slip.
+    /// Not found = Pending, with a "history-not-found" screenshot.
     /// </summary>
     public async Task<BetOutcome> GetOutcomeAsync(Slip slip, CancellationToken ct)
     {
         var page = await Page();
-        // The history cards show no team names ("5 events"): match by placing time, odds and number of picks first.
-        if (await FindByTimeAndOddsAsync(page, slip) is { } byCard)
+        var cards = await ReadCardsAsync(page);
+        HistoryCard? card;
+        if (IsBetId(slip.BetReference))
         {
-            log.LogInformation("1win: slip #{Id} in history → {Outcome}: {Text}", slip.Id, byCard.outcome, byCard.text);
-            return byCard.outcome;
+            card = cards.FirstOrDefault(c => c.Id == slip.BetReference);
         }
-        var found = await BetHistory.ReadAsync(page, At, o.HistoryPaths, o.HistoryLinkRegex, slip, log);
-        if (found is null)
+        else
+        {
+            var placedUtc = DateTime.TryParseExact(slip.BetReference?.Replace("1win-", ""), "yyyyMMdd-HHmmss", CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var r) ? r : slip.CreatedAt;
+            var fits = Fitting(cards, placedUtc, slip.Picks.Count, slip.CombinedOdds, 0.02m);
+            if (fits.Count > 1)
+            {
+                var shot = await SaveDebug(page, "history-two-cards");
+                log.LogWarning("1win: slip #{Id}: {Count} history cards fit its time, picks and odds (IDs {Ids}); not deciding (screenshot {Shot})",
+                    slip.Id, fits.Count, string.Join(", ", fits.Select(c => c.Id)), shot);
+                return BetOutcome.Pending;
+            }
+            card = fits.FirstOrDefault();
+            if (card is not null)
+            {
+                log.LogInformation("1win: slip #{Id} is bet ID {BetId}; kept as its bet number", slip.Id, card.Id);
+                slip.BetReference = card.Id; // saved with the run; next time exactly this card is read
+            }
+        }
+        if (card is null)
         {
             var shot = await SaveDebug(page, "history-not-found");
-            log.LogWarning("1win: slip #{Id} not found in the bet history (screenshot {Shot})", slip.Id, shot);
+            log.LogWarning("1win: slip #{Id} (bet {Ref}) not found in the bet history (screenshot {Shot})", slip.Id, slip.BetReference, shot);
             return BetOutcome.Pending;
         }
-        log.LogInformation("1win: slip #{Id} in history → {Outcome}: {Text}", slip.Id, found.Value.outcome, found.Value.text);
-        return found.Value.outcome;
+        log.LogInformation("1win: slip #{Id} in history → {Outcome}: {Text}", slip.Id, card.Outcome, card.Text);
+        return card.Outcome;
     }
+
+    /// <summary>1win's bet ID, e.g. "330497469" (older slips have "1win-yyyyMMdd-HHmmss").</summary>
+    private static bool IsBetId(string? reference) => reference is { Length: >= 5 } && reference.All(char.IsDigit);
+
+    private sealed record HistoryCard(string Id, DateTime PlacedEat, BetOutcome Outcome, decimal Odds, int Events, string Text);
 
     /// <summary>
     /// Each card on 1win's Bet history page (seen 2026-10-08), e.g.
@@ -573,18 +613,28 @@ public sealed class OneWinClient(
     }";
 
     private static readonly Regex CardRegex = new(
-        @"(?<date>\d{1,2} [A-Za-z]+ \d{4}) at (?<time>\d{1,2}:\d{2}\s*[ap]m).*?\bID \d+\s+(?<status>[A-Za-z ]+?)\s*•.*?(?<odds>\d+(\.\d+)?)\s+(?<events>\d+) events?",
+        @"(?<date>\d{1,2} [A-Za-z]+ \d{4}) at (?<time>\d{1,2}:\d{2}\s*[ap]m).*?\bID (?<id>\d+)\s+(?<status>[A-Za-z ]+?)\s*•.*?(?<odds>\d+(\.\d+)?)\s+(?<events>\d+) events?",
         RegexOptions.IgnoreCase);
 
-    /// <summary>
-    /// The slip's card: placed within 3 minutes of the slip's bet time (the "1win-yyyyMMdd-HHmmss" reference, UTC), same
-    /// number of picks, odds within 0.02. Its first word gives the result: Lost / Opened / Won.
-    /// </summary>
-    private async Task<(BetOutcome outcome, string text)?> FindByTimeAndOddsAsync(IPage page, Slip slip)
+    /// <summary>Cards placed within 3 minutes of the time (UTC) with this many picks and odds within the tolerance.</summary>
+    private static List<HistoryCard> Fitting(IEnumerable<HistoryCard> cards, DateTime placedUtc, int picks, decimal odds, decimal tolerance)
     {
-        var placedUtc = DateTime.TryParseExact(slip.BetReference?.Replace("1win-", ""), "yyyyMMdd-HHmmss", CultureInfo.InvariantCulture,
-            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var r) ? r : slip.CreatedAt;
         var placedEat = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(placedUtc, DateTimeKind.Utc), Eat.Zone);
+        return cards.Where(c => Math.Abs((c.PlacedEat - placedEat).TotalMinutes) <= 3 && c.Events == picks
+                                && Math.Abs(c.Odds - odds) <= tolerance).ToList();
+    }
+
+    /// <summary>The one card fitting a bet just placed, or null (none, or more than one).</summary>
+    private async Task<HistoryCard?> FindCardAsync(IPage page, DateTime placedUtc, int picks, decimal odds, decimal tolerance)
+    {
+        var fits = Fitting(await ReadCardsAsync(page), placedUtc, picks, odds, tolerance);
+        return fits.Count == 1 ? fits[0] : null;
+    }
+
+    /// <summary>Every card on the Bet history page (newest first, as 1win lists them). Its status gives the result: Lost / Opened / Won.</summary>
+    private async Task<List<HistoryCard>> ReadCardsAsync(IPage page)
+    {
+        var result = new List<HistoryCard>();
         foreach (var path in o.HistoryPaths)
         {
             string[] cards = [];
@@ -612,17 +662,16 @@ public sealed class OneWinClient(
                 if (!m.Success) continue;
                 if (!DateTime.TryParseExact($"{m.Groups["date"].Value} {m.Groups["time"].Value.Replace(" ", "")}", "d MMMM yyyy h:mmtt",
                         CultureInfo.InvariantCulture, DateTimeStyles.None, out var cardTime)) continue;
-                if (Math.Abs((cardTime - placedEat).TotalMinutes) > 3) continue;
-                if (int.Parse(m.Groups["events"].Value) != slip.Picks.Count) continue;
-                if (Math.Abs(decimal.Parse(m.Groups["odds"].Value, CultureInfo.InvariantCulture) - slip.CombinedOdds) > 0.02m) continue;
                 var status = m.Groups["status"].Value.Trim().ToLowerInvariant();
                 var outcome = status.StartsWith("lost") ? BetOutcome.Lost
                     : status.StartsWith("won") || status.StartsWith("return") || status.StartsWith("cashed") ? BetOutcome.Won
                     : BetOutcome.Pending; // Opened (and anything unknown) = still running
-                return (outcome, card);
+                result.Add(new HistoryCard(m.Groups["id"].Value, cardTime, outcome,
+                    decimal.Parse(m.Groups["odds"].Value, CultureInfo.InvariantCulture), int.Parse(m.Groups["events"].Value), card));
             }
+            if (result.Count > 0) break;
         }
-        return null;
+        return result;
     }
 
     // ---------- helpers ----------
