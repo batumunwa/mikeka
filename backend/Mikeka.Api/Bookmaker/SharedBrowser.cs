@@ -29,6 +29,8 @@ public sealed class SharedBrowser(IOptions<BrowserOptions> options, IServiceScop
     private IPlaywright? _pw;
     private IBrowser? _browser;
     private IBrowserContext? _context;
+    /// <summary>1 when a run had to start Chrome; the next run's Activity says so once.</summary>
+    private int _chromeStarted;
 
     private bool UseOwnChrome => !string.IsNullOrWhiteSpace(options.Value.CdpUrl);
 
@@ -49,6 +51,9 @@ public sealed class SharedBrowser(IOptions<BrowserOptions> options, IServiceScop
         try
         {
             var context = await ContextAsync(ct);
+            if (Interlocked.Exchange(ref _chromeStarted, 0) == 1)
+                await AddRunLogAsync(account.Id, "Warning",
+                    "Chrome was closed, so this run opened it. A freshly opened Chrome usually gets the 1win puzzle at the next login: keep it open from now on.");
             var page = await SiteTabAsync(context, site, ct);
             if (_owners.TryGetValue(site, out var owner) && owner.AccountId != account.Id)
                 page = await WaitForLogoutAsync(context, page, site, siteUrl, loginButton, owner, account, ct);
@@ -219,6 +224,7 @@ public sealed class SharedBrowser(IOptions<BrowserOptions> options, IServiceScop
             Arguments = $"--remote-debugging-port={port} --user-data-dir=\"{o.ProfileDir}\" --no-first-run --no-default-browser-check",
             UseShellExecute = false,
         });
+        _chromeStarted = 1;
         log.LogInformation("Started Chrome with remote debugging on port {Port} (profile {Dir})", port, o.ProfileDir);
     }
 

@@ -47,6 +47,7 @@ else
 
 if (builder.Configuration.GetValue("Betting:SchedulerEnabled", true))
     builder.Services.AddHostedService<CheckScheduler>();
+builder.Services.AddHostedService<ChromeWatch>(); // tells the user when the system Chrome closes (1win puzzle at the next login)
 
 var app = builder.Build();
 
