@@ -44,6 +44,7 @@ public class SlipAnalysis(
     {
         var account = await db.Accounts.FindAsync([accountId], ct) ?? throw new KeyNotFoundException("Account not found.");
         var rules = _rules.ForAccount(account);
+        rules.Taken = await OpenPicks.LoadAsync(db, account.Id, clock.GetUtcNow().UtcDateTime, _rules.MatchMinutes, ct);
         var fromUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(fromEat, DateTimeKind.Unspecified), Eat.Zone);
         var toUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(toEat, DateTimeKind.Unspecified), Eat.Zone);
         var nowUtc = clock.GetUtcNow().UtcDateTime;

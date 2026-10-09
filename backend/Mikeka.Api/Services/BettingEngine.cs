@@ -98,6 +98,8 @@ public class BettingEngine(
         var stake = StakeCalculator.NextStake(account);
         var endOfToday = TimeZoneInfo.ConvertTimeToUtc(today.AddDays(1).ToDateTime(TimeOnly.MinValue), Eat.Zone);
         var accountRules = _rules.ForAccount(account);
+        // Matches already riding on open slips (all accounts, all sites) with the same market + minutes are not bet again.
+        accountRules.Taken = await OpenPicks.LoadAsync(db, account.Id, nowUtc, _rules.MatchMinutes, ct);
 
         // A slip chosen by an earlier run that could not place it (login failed, …): continue with it while every match is
         // still to start and the stake is unchanged, instead of reading all the leagues again.
@@ -105,7 +107,11 @@ public class BettingEngine(
         if (PreparedSlips.Get(account.Id) is { } prepared)
         {
             var firstKickoff = prepared.Plan.Picks.Min(p => p.Match.Kickoff);
-            if (prepared.Stake == stake && prepared.Reuses < PreparedSlips.MaxReuses && firstKickoff > nowUtc.AddMinutes(5))
+            var nowTaken = prepared.Plan.Picks.Select(p => SlipBuilder.TakenBy(p.Match, p.Selection, accountRules)).FirstOrDefault(t => t is not null);
+            if (nowTaken is not null)
+                await Log(account, $"The slip chosen at {EatTime(prepared.ChosenAtUtc):dd/MM HH:mm} EAT has {nowTaken.Home} v {nowTaken.Away}, " +
+                                   $"now bet in the same minutes on {nowTaken.Where}; choosing a new slip.");
+            if (nowTaken is null && prepared.Stake == stake && prepared.Reuses < PreparedSlips.MaxReuses && firstKickoff > nowUtc.AddMinutes(5))
             {
                 plan = prepared.Plan;
                 PreparedSlips.Save(account.Id, prepared with { Reuses = prepared.Reuses + 1 });

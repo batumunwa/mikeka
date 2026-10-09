@@ -14,6 +14,12 @@ public record Pick(MatchInfo Match, Selection Selection)
     public decimal Odds => Selection.Odds;
 }
 
+/// <summary>
+/// A pick already riding on an open slip (any account, any site), e.g. Man United v Chelsea, family "goal", range "1-10".
+/// The same match is never bet again with the same market family and minute range while it is open.
+/// </summary>
+public record TakenPick(string Home, string Away, DateTime Kickoff, string Family, string Range, string Where);
+
 public record SlipPlan(IReadOnlyList<Pick> Picks, decimal CombinedOdds);
 
 /// <summary>What the system decided for one match, with the reasons in order.</summary>
@@ -55,7 +61,8 @@ public static class SlipBuilder
                             && choice.Side.Equals(s.Side, StringComparison.OrdinalIgnoreCase)
                             && s.Interval == choice.IntervalKey // whole-match choice only takes whole-match lines, and vice versa
                             && (choice.RequiredLine is not { } line || s.Line == line) // a value set by the user = exactly that line
-                            && s.Odds >= rules.MinPickOdds && s.Odds <= rules.MaxPickOdds)
+                            && s.Odds >= rules.MinPickOdds && s.Odds <= rules.MaxPickOdds
+                            && TakenBy(match, s, rules) is null) // already bet in these minutes on an open slip
                 .OrderByDescending(s => s.Line).ThenBy(s => s.Odds)
                 .FirstOrDefault();
             if (sel is not null) return new Pick(match, sel);
@@ -95,6 +102,14 @@ public static class SlipBuilder
                 steps.Add($"{label}: ✓ {SelectionText(pick.Selection)} @ {pick.Odds:0.00}");
                 return new MatchDecision(match, pick, steps);
             }
+            var taken = offered.Where(s => s.Odds >= rules.MinPickOdds && s.Odds <= rules.MaxPickOdds)
+                .Select(s => (s, t: TakenBy(match, s, rules))).FirstOrDefault(x => x.t is not null);
+            if (taken.t is { } t)
+            {
+                steps.Add($"{label}: {SelectionText(taken.s)} @ {taken.s.Odds:0.00} is in range, but this match is already bet " +
+                          $"in the same minutes on {t.Where} (open): skipped.");
+                continue;
+            }
             var closest = offered.OrderBy(s => Math.Abs(s.Odds - (rules.MinPickOdds + rules.MaxPickOdds) / 2)).First();
             steps.Add($"{label}: no line at {rules.MinPickOdds:0.00}–{rules.MaxPickOdds:0.00} (closest {SelectionText(closest)} @ {closest.Odds:0.00}).");
         }
@@ -111,6 +126,39 @@ public static class SlipBuilder
         static string N(string s) => System.Text.RegularExpressions.Regex.Replace(s.ToLowerInvariant(), @"[^\p{L}\p{N}]+", " ").Trim();
         static bool Has(string team, string excluded) => $" {N(team)} ".Contains($" {N(excluded)} ");
         return rules.ExcludedTeams.FirstOrDefault(x => N(x).Length > 0 && (Has(match.Home, x) || Has(match.Away, x)));
+    }
+
+    /// <summary>
+    /// Markets that win or lose together count as one: goals Under 0.5 in 1'–10' = "No goal" in 1'–10' = draw after 10'
+    /// (all lose on an early goal). Other markets are their own family.
+    /// </summary>
+    public static string Family(string market) =>
+        market.Equals("goals", StringComparison.OrdinalIgnoreCase) || market.Equals("result", StringComparison.OrdinalIgnoreCase)
+            ? "goal" : market.ToLowerInvariant();
+
+    /// <summary>"1-10", "1-5", or "match" for a whole-match line. 1'–5' and 1'–10' differ (a goal at 7' wins one, loses the other).</summary>
+    public static string Range(string? interval) => interval ?? "match";
+
+    /// <summary>
+    /// The open pick that already covers this selection, or null. Same match across sites = kickoff within 15 minutes and the
+    /// home or the away team the same (case/punctuation ignored; a name of 5+ letters inside the other also counts,
+    /// e.g. "Manchester United FC" = "Manchester United").
+    /// </summary>
+    public static TakenPick? TakenBy(MatchInfo match, Selection sel, BettingRules rules)
+    {
+        if (rules.Taken.Count == 0) return null;
+        string family = Family(sel.Market), range = Range(sel.Interval);
+        return rules.Taken.FirstOrDefault(t => t.Family == family && t.Range == range
+            && Math.Abs((t.Kickoff - match.Kickoff).TotalMinutes) <= 15
+            && (SameTeam(t.Home, match.Home) || SameTeam(t.Away, match.Away)));
+    }
+
+    private static bool SameTeam(string a, string b)
+    {
+        static string N(string s) => System.Text.RegularExpressions.Regex.Replace(s.ToLowerInvariant(), @"[^\p{L}\p{N}]", "");
+        string x = N(a), y = N(b);
+        if (x.Length == 0 || y.Length == 0) return false;
+        return x == y || (Math.Min(x.Length, y.Length) >= 5 && (x.Contains(y) || y.Contains(x)));
     }
 
     public static string SelectionText(Selection s) =>

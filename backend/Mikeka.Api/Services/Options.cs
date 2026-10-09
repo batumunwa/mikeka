@@ -22,6 +22,8 @@ public class BettingRules
     public int AlertAfterLosses => StopAfterLosses - 1;
     /// <summary>Teams never bet on (Settings page, all accounts).</summary>
     public List<string> ExcludedTeams { get; set; } = [];
+    /// <summary>Picks on open slips of all accounts (filled in per run): the same match + market range is not bet again.</summary>
+    public List<TakenPick> Taken { get; set; } = [];
     // Timing (Settings page, copied here by SettingsService).
     /// <summary>Matches are looked for from now over up to this many consecutive days (today first).</summary>
     public int MaxDaysAhead { get; set; } = 7;

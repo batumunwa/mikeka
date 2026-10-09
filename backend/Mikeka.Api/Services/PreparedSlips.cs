@@ -24,6 +24,8 @@ public static class PreparedSlips
 
     public static Prepared? Get(int accountId) => Slips.TryGetValue(accountId, out var p) ? p : null;
 
+    public static IEnumerable<KeyValuePair<int, Prepared>> All() => Slips.ToArray();
+
     public static void Save(int accountId, Prepared prepared)
     {
         Slips[accountId] = prepared;
