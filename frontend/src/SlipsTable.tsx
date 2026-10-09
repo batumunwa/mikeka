@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, isPlaced, pickText, type Slip } from './api'
+import { api, isPlaced, pickText, type PickResult, type Slip } from './api'
 import { useConfirm, type ConfirmOptions } from './ui'
 
 const money = (n: number | null | undefined, cur: string) => (n == null ? '—' : `${n.toLocaleString()} ${cur}`)
@@ -27,6 +27,20 @@ export function SlipsTable({ slips, currency, onChanged }: { slips: Slip[]; curr
     setError(null)
     try {
       await fn()
+      onChanged?.()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /** A lost slip's pick marked won/lost (or cleared) by the user: no confirmation, a second click undoes it. */
+  const markPick = async (slipId: number, pickId: number, result: PickResult | null) => {
+    setBusy(slipId)
+    setError(null)
+    try {
+      await api.setPickResult(pickId, result)
       onChanged?.()
     } catch (e) {
       setError((e as Error).message)
@@ -63,9 +77,18 @@ export function SlipsTable({ slips, currency, onChanged }: { slips: Slip[]; curr
                 {s.picks.length === 0 ? <span className="muted">—</span> : (
                   <ul className="picks">
                     {s.picks.map((p, i) => (
-                      <li key={i}>
+                      <li key={i} className={p.result ? `pick-${p.result.toLowerCase()}` : ''}>
                         <span className="kick">{eat(p.kickoff)}</span> <b>{p.home} v {p.away}</b>
                         <br /><span className="small market">{pickText(p)}</span> <span className="odd">{p.odds.toFixed(2)}</span>
+                        {s.status === 'Won' && <span className="pick-mark won" title="Won">✓</span>}
+                        {s.status === 'Lost' && p.id != null && (
+                          <span className="pick-result" title="Which picks lost this slip? (for the statistics)">
+                            <button className={`pick-btn won ${p.result === 'Won' ? 'on' : ''}`} disabled={busy === s.id}
+                              onClick={() => markPick(s.id, p.id!, p.result === 'Won' ? null : 'Won')}>✓</button>
+                            <button className={`pick-btn lost ${p.result === 'Lost' ? 'on' : ''}`} disabled={busy === s.id}
+                              onClick={() => markPick(s.id, p.id!, p.result === 'Lost' ? null : 'Lost')}>✕</button>
+                          </span>
+                        )}
                       </li>
                     ))}
                   </ul>

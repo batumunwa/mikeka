@@ -124,7 +124,12 @@ public class SlipPick
     /// <summary>The site's own market and outcome when it differs from the usual wording, e.g. "10 Minute Result: X".</summary>
     public string? Label { get; set; }
     public decimal Odds { get; set; }
+    /// <summary>This pick's own result: null = not known yet. A won slip marks all its picks Won; on a lost slip the user
+    /// marks which pick(s) lost (Slips table), so the statistics show which leagues and markets lose.</summary>
+    public PickResult? Result { get; set; }
 }
+
+public enum PickResult { Won, Lost }
 
 /// <summary>System-wide betting settings edited on the Settings page (a single row, Id = 1).</summary>
 public class BettingSettings

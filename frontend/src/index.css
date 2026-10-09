@@ -329,3 +329,14 @@ tr.slip.placed { --row-line: var(--won); --row-bg: var(--won-bg); }
 .form fieldset.limits { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
 .limits-line { padding-top: 6px; }
 .settings textarea { width: 100%; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: inherit; resize: vertical; box-sizing: border-box; }
+
+/* Per-pick result on settled slips: ✓ on won slips, ✓ / ✕ toggles on lost slips (for the pick statistics). */
+.picks li.pick-lost { box-shadow: inset 3px 0 0 var(--lost); padding-left: 6px; }
+.picks li.pick-won { box-shadow: inset 3px 0 0 var(--won); padding-left: 6px; }
+.pick-mark.won { color: var(--won); margin-left: 6px; font-weight: 700; }
+.pick-result { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; }
+.pick-btn { min-width: 26px; padding: 0 6px; height: 22px; font-size: 0.8rem; line-height: 1; border-radius: 6px;
+  background: transparent; border: 1px solid var(--line); color: var(--muted, inherit); }
+.pick-btn.won.on { background: var(--won-bg); color: var(--won); border-color: var(--won); }
+.pick-btn.lost.on { background: var(--lost-bg); color: var(--lost); border-color: var(--lost); }
+.pick-stats td.pos { color: var(--won); }

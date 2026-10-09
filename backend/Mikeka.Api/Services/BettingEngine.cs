@@ -255,7 +255,7 @@ public class BettingEngine(
     /// </summary>
     public async Task SettleManuallyAsync(int slipId, bool won, CancellationToken ct)
     {
-        var slip = await db.Slips.SingleOrDefaultAsync(s => s.Id == slipId, ct) ?? throw new KeyNotFoundException("Slip not found.");
+        var slip = await db.Slips.Include(s => s.Picks).SingleOrDefaultAsync(s => s.Id == slipId, ct) ?? throw new KeyNotFoundException("Slip not found.");
         if (slip.Status != SlipStatus.Pending)
             throw new InvalidOperationException($"Slip #{slipId} is {slip.Status}; only Pending slips can be marked Won or Lost.");
         var account = await db.Accounts.SingleAsync(a => a.Id == slip.AccountId, ct);
@@ -268,6 +268,7 @@ public class BettingEngine(
         slip.Status = won ? SlipStatus.Won : SlipStatus.Lost;
         slip.SettledAt = clock.GetUtcNow().UtcDateTime;
         slip.BalanceAfter = balance;
+        if (won) foreach (var p in slip.Picks) p.Result = PickResult.Won; // a lost slip's losing picks are marked by the user
         account.LastBalance = balance ?? account.LastBalance;
         account.LossStreak = won ? 0 : account.LossStreak + 1;
         await Log(account, $"Slip #{slip.Id} {slip.Status}. Loss streak now {account.LossStreak}.");

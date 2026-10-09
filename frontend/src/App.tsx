@@ -5,6 +5,7 @@ import { AccountForm } from './AccountForm'
 import { AccountPanel } from './AccountPanel'
 import { AnalysisPanel } from './AnalysisPanel'
 import { SettingsPanel } from './SettingsPanel'
+import { PickStats } from './PickStats'
 import { Modal, money, SITE_COLORS, SiteAvatar, Stat, StreakDots, useConfirm } from './ui'
 
 const range = (a?: number, b?: number) => (a && b ? `${a.toFixed(2)}–${b.toFixed(2)}` : '…')
@@ -23,6 +24,7 @@ export default function App() {
   const [preview, setPreview] = useState<{ account: Account; result: MatchesResult } | null>(null)
   const [settings, setSettings] = useState<Settings | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [showStats, setShowStats] = useState(false)
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const [totalHistory, setTotalHistory] = useState<BalancePoint[] | null>(null)
 
@@ -105,6 +107,7 @@ export default function App() {
           </div>
         </div>
         <div className="actions">
+          <button className="on-dark ghost" onClick={() => setShowStats(true)}>Pick statistics</button>
           <button className="on-dark ghost" onClick={() => setShowSettings(true)}>Settings</button>
           <button className="on-dark" onClick={() => setEditing('new')}>+ Register account</button>
         </div>
@@ -140,6 +143,7 @@ export default function App() {
         </Modal>
       )}
 
+      {showStats && <PickStats onClose={() => setShowStats(false)} />}
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} onSaved={setSettings} />}
 
       {notice && <p className={notice.kind === 'error' ? 'error banner' : 'ok banner'}>{notice.text}</p>}

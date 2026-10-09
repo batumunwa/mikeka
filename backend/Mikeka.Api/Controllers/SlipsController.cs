@@ -17,7 +17,11 @@ public class SlipsController(MikekaDb db, ExcelLog excel) : ControllerBase
             {
                 s.Id, s.AccountId, s.BetDay, s.CreatedAt, s.SettledAt, Status = s.Status.ToString(), s.Stake,
                 s.CombinedOdds, s.PotentialReturn, s.BetReference, s.BalanceBefore, s.BalanceAfter, s.Note, s.SettlementChecks, s.ResultCheckedAt,
-                Picks = s.Picks.OrderBy(p => p.Kickoff).Select(p => new { p.League, p.Home, p.Away, p.Kickoff, p.Market, p.Side, p.Line, p.Odds, p.Interval, p.Label }),
+                Picks = s.Picks.OrderBy(p => p.Kickoff).Select(p => new
+                {
+                    p.Id, p.League, p.Home, p.Away, p.Kickoff, p.Market, p.Side, p.Line, p.Odds, p.Interval, p.Label,
+                    Result = p.Result == null ? null : p.Result.ToString(),
+                }),
             })
             .ToListAsync());
 
@@ -37,6 +41,47 @@ public class SlipsController(MikekaDb db, ExcelLog excel) : ControllerBase
         await db.SaveChangesAsync(ct);
         await excel.WriteFileAsync(ct);
         return NoContent();
+    }
+
+    /// <summary>
+    /// One pick's own result, set by hand (result = "Won", "Lost", or empty to clear). Only on settled slips: on a won slip
+    /// all picks won, so it is for marking which pick(s) lost a lost slip.
+    /// </summary>
+    [HttpPut("picks/{id:int}/result")]
+    public async Task<IActionResult> SetPickResult(int id, string? result, CancellationToken ct)
+    {
+        var pick = await db.SlipPicks.SingleOrDefaultAsync(p => p.Id == id, ct);
+        if (pick is null) return NotFound();
+        var slip = await db.Slips.AsNoTracking().SingleAsync(s => s.Id == pick.SlipId, ct);
+        if (slip.Status != Domain.SlipStatus.Lost)
+            return ValidationProblem($"Slip #{slip.Id} is {slip.Status}; pick results are marked on lost slips only.");
+        if (string.IsNullOrWhiteSpace(result)) pick.Result = null;
+        else if (Enum.TryParse<Domain.PickResult>(result, true, out var r)) pick.Result = r;
+        else return ValidationProblem("Result must be Won, Lost or empty.");
+        await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Pick results per site, league and market (with its minutes), e.g. 1win · England. Premier League · goals none in 1-10:
+    /// 14 won, 2 lost, 1 not marked. Only picks of settled slips count.
+    /// </summary>
+    [HttpGet("stats/picks")]
+    public async Task<IActionResult> PickStats(CancellationToken ct)
+    {
+        var rows = await db.Slips.AsNoTracking().Where(s => s.Status == Domain.SlipStatus.Won || s.Status == Domain.SlipStatus.Lost)
+            .SelectMany(s => s.Picks, (s, p) => new { s.Account!.Site, p.League, p.Market, p.Side, p.Line, p.Interval, p.Result })
+            .ToListAsync(ct);
+        return Ok(rows
+            .GroupBy(r => (Site: r.Site.ToLowerInvariant(), r.League, Market: SlipBuilder.Family(r.Market), Range: SlipBuilder.Range(r.Interval)))
+            .Select(g => new
+            {
+                g.Key.Site, g.Key.League, g.Key.Market, g.Key.Range,
+                Won = g.Count(r => r.Result == Domain.PickResult.Won),
+                Lost = g.Count(r => r.Result == Domain.PickResult.Lost),
+                Unmarked = g.Count(r => r.Result == null),
+            })
+            .OrderByDescending(x => x.Lost).ThenByDescending(x => x.Won + x.Lost));
     }
 
     /// <summary>Result entered by hand for a Pending slip (e.g. one placed without a bet number).</summary>

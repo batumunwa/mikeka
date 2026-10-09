@@ -13,6 +13,19 @@ export interface MarketChoice {
   intervalTo?: number | null
 }
 
+export type PickResult = 'Won' | 'Lost'
+
+/** Pick results per site, league and market range (picks of settled slips). */
+export interface PickStat {
+  site: string
+  league: string
+  market: string
+  range: string
+  won: number
+  lost: number
+  unmarked: number
+}
+
 /** "Corners · Under" or "Goals · none in 1–10 min". */
 export const choiceText = (m: { market: MarketKey; side: string; line?: number | null; intervalFrom?: number | null; intervalTo?: number | null }) => {
   if (m.market === 'result') return `Result · draw after minute ${m.intervalTo ?? '?'}`
@@ -113,6 +126,9 @@ export interface Pick {
   interval?: string | null
   /** The site's own market and outcome, e.g. "10 Minute Result: X (draw)". */
   label?: string | null
+  /** Pick id and its own result on settled slips (null = not marked). */
+  id?: number
+  result?: PickResult | null
 }
 
 export type SlipStatus = 'Pending' | 'Won' | 'Lost' | 'Skipped' | 'Draft'
@@ -266,6 +282,8 @@ export const api = {
   saveSettings: (s: Settings) => call<Settings>('/settings', { method: 'PUT', body: JSON.stringify(s) }),
   settleSlip: (id: number, won: boolean) => call<void>(`/slips/${id}/settle?won=${won}`, { method: 'POST' }),
   deleteSlip: (id: number) => call<void>(`/slips/${id}`, { method: 'DELETE' }),
+  setPickResult: (id: number, result: PickResult | null) => call<void>(`/picks/${id}/result?result=${result ?? ""}`, { method: "PUT" }),
+  pickStats: () => call<PickStat[]>("/stats/picks"),
 }
 
 /** The bet is really on the site: it has the site's bet number, or it was settled Won/Lost. */
