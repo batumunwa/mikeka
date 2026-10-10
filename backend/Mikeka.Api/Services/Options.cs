@@ -55,14 +55,40 @@ public class BettingRules
     /// becomes a check time when the next match ends more than SettlementGapMinutes later; the last end always is one.
     /// E.g. ends 17:00, 17:30, 20:00 with a 60-minute gap → checks at 17:30 and 20:00.
     /// </summary>
-    public List<DateTime> SettlementChecks(IEnumerable<DateTime> kickoffsUtc)
+    public List<DateTime> SettlementChecks(IEnumerable<DateTime> kickoffsUtc) =>
+        SettlementChecks(kickoffsUtc.Select(k => (k, (string?)null)));
+
+    /// <summary>
+    /// As above, plus an early check for each minutes pick ("none in minutes 1–10"): it is decided long before the match
+    /// ends, so a loss (or the last pick won) is seen then and the next slip starts at once. These are never merged away,
+    /// and each gets a second look <see cref="RecheckMinutes"/> later in case the site was slow to settle it.
+    /// </summary>
+    public List<DateTime> SettlementChecks(IEnumerable<(DateTime Kickoff, string? Interval)> picks)
     {
-        var ends = kickoffsUtc.Select(k => k.AddMinutes(MatchMinutes)).Order().ToList();
+        var list = picks.ToList();
+        var ends = list.Select(p => p.Kickoff.AddMinutes(MatchMinutes)).Order().ToList();
         var checks = new List<DateTime>();
         for (int i = 0; i < ends.Count; i++)
             if (i == ends.Count - 1 || ends[i + 1] - ends[i] > TimeSpan.FromMinutes(SettlementGapMinutes))
                 checks.Add(ends[i]);
-        return checks;
+        foreach (var p in list)
+            if (IntervalEnd(p.Kickoff, p.Interval) is { } early && early < p.Kickoff.AddMinutes(MatchMinutes))
+                checks.AddRange([early, early.AddMinutes(RecheckMinutes)]);
+        return checks.Where(t => t <= ends[^1]).Distinct().Order().ToList();
+    }
+
+    /// <summary>A minutes pick's second result check comes this long after the first.</summary>
+    public const int RecheckMinutes = 15;
+
+    /// <summary>
+    /// When a minutes pick ("1-10") is decided and can be read (UTC): its last minute, plus the half-time break (15) and
+    /// first-half added time (3) for second-half minutes, plus 8 minutes for added time and the site to settle it.
+    /// Null for a whole-match pick.
+    /// </summary>
+    public static DateTime? IntervalEnd(DateTime kickoffUtc, string? interval)
+    {
+        if (interval?.Split('-') is not [_, var last] || !int.TryParse(last, out var to)) return null;
+        return kickoffUtc.AddMinutes(to + (to > 45 ? 18 : 0) + 8);
     }
 
     /// <summary>A copy of these rules limited to one market row (used to explain decisions).</summary>

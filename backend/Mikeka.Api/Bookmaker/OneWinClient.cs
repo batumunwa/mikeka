@@ -662,8 +662,8 @@ public sealed class OneWinClient(
     /// </summary>
     private async Task ReadPickResultsAsync(IPage page, Slip slip, string betId)
     {
-        var played = DateTime.UtcNow.AddMinutes(-15);
-        if (!slip.Picks.Any(p => p.Result is null && p.Kickoff < played)) return;
+        var now = DateTime.UtcNow; // a minutes pick ("1-5") is read once decided, a whole-match one once it is under way
+        if (!slip.Picks.Any(p => p.Result is null && (BettingRules.IntervalEnd(p.Kickoff, p.Interval) ?? p.Kickoff.AddMinutes(15)) <= now)) return;
         try
         {
             await page.OpenAsync(At($"/betting/bets-history/{betId}"), log);

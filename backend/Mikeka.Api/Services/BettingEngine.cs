@@ -198,7 +198,7 @@ public class BettingEngine(
             CombinedOdds = plan.CombinedOdds,
             PotentialReturn = Math.Round(stake * plan.CombinedOdds, 2),
             BalanceBefore = balance,
-            SettlementChecks = _rules.SettlementChecks(plan.Picks.Select(p => p.Match.Kickoff)),
+            SettlementChecks = _rules.SettlementChecks(plan.Picks.Select(p => (p.Match.Kickoff, p.Selection.Interval))),
             Picks = plan.Picks.Select(p => new SlipPick
             {
                 MatchId = p.Match.Id, League = p.Match.League, Home = p.Match.Home, Away = p.Match.Away,
@@ -325,10 +325,10 @@ public class BettingEngine(
         await excel.WriteFileAsync(ct);
     }
 
-    /// <summary>The slip's result check times; slips placed before these were stored get them from their picks.</summary>
+    /// <summary>The slip's result check times, from its picks with the current settings (incl. the early checks of minutes picks).</summary>
     private List<DateTime> Checks(Slip s) =>
-        s.SettlementChecks.Count > 0 ? s.SettlementChecks
-        : s.Picks.Count > 0 ? _rules.SettlementChecks(s.Picks.Select(p => p.Kickoff))
+        s.Picks.Count > 0 ? _rules.SettlementChecks(s.Picks.Select(p => (p.Kickoff, p.Interval)))
+        : s.SettlementChecks.Count > 0 ? s.SettlementChecks
         : [s.CreatedAt.AddMinutes(_rules.MatchMinutes)];
 
     /// <summary>
