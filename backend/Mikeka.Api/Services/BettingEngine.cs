@@ -73,6 +73,16 @@ public class BettingEngine(
             }
         }
 
+        // A chosen slip waiting for its placing time: nothing to do on the site yet (checked again below if anything changed).
+        if (pending.Count == 0 && PreparedSlips.Get(account.Id) is { } held && PlaceAt(held.Plan) > nowUtc.AddMinutes(1)
+            && held.Stake == StakeCalculator.NextStake(account) && held.Reuses < PreparedSlips.MaxReuses)
+        {
+            var heldRules = _rules.ForAccount(account);
+            heldRules.Taken = await OpenPicks.LoadAsync(db, account.Id, nowUtc, _rules.MatchMinutes, ct);
+            if (held.Plan.Picks.All(p => SlipBuilder.TakenBy(p.Match, p.Selection, heldRules) is null))
+                return await Hold(account, held.Plan, held.ChosenAtUtc);
+        }
+
         await using var client = await bookmakers.CreateAsync(account, secrets.Unprotect(account.PasswordProtected), ct);
         var loggedIn = false;
 
@@ -114,6 +124,9 @@ public class BettingEngine(
             if (nowTaken is null && prepared.Stake == stake && prepared.Reuses < PreparedSlips.MaxReuses && firstKickoff > nowUtc.AddMinutes(5))
             {
                 plan = prepared.Plan;
+                // Held until its placing time: no login, no try counted.
+                if (PlaceAt(plan) > nowUtc.AddMinutes(1))
+                    return await Hold(account, plan, prepared.ChosenAtUtc);
                 PreparedSlips.Save(account.Id, prepared with { Reuses = prepared.Reuses + 1 });
                 await Log(account, $"Continuing with the slip chosen at {EatTime(prepared.ChosenAtUtc):dd/MM HH:mm} EAT " +
                                    $"({plan.Picks.Count} picks @ {plan.CombinedOdds}); matches not read again.");
@@ -146,6 +159,9 @@ public class BettingEngine(
 
             // Kept until placed: if the login or the placing fails, the next run continues from here.
             PreparedSlips.Save(account.Id, new PreparedSlips.Prepared(plan, stake, nowUtc, 0));
+            // Placed only shortly before the first kickoff (after the line-ups); until then the matches are kept for this account.
+            if (PlaceAt(plan) > nowUtc.AddMinutes(1))
+                return await Hold(account, plan, nowUtc);
         }
 
         // 3) A slip is possible: log in only now, for the balance and the bet.
@@ -220,6 +236,13 @@ public class BettingEngine(
                     $"A slip of {plan.Picks.Count} picks @ {plan.CombinedOdds}, stake {stake:N0} {account.Currency}, was sent to {account.Site} " +
                     $"but no bet number was seen.\n{ex.Message}\n\nCheck 'My bets' on the site, then mark the slip Won or Lost in the dashboard " +
                     "(or delete it if it was never placed). No new bets are placed for this account until then.", ct);
+            }
+            catch (PickGoneException ex)
+            {
+                // A pick's odds moved out of range (or its market went): a new slip is chosen at the next try.
+                PreparedSlips.Remove(account.Id);
+                account.NextCheckAt = nowUtc.AddMinutes(PreparedSlips.RetryMinutes);
+                return await Done(account, "NotPlaced", $"Slip not placed: {ex.Message} A new slip is chosen in {PreparedSlips.RetryMinutes} min.");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -315,6 +338,21 @@ public class BettingEngine(
     {
         var now = clock.GetUtcNow().UtcDateTime;
         return Checks(s).Where(t => t > now).DefaultIfEmpty(now.AddMinutes(_rules.CheckIntervalMinutes)).Min();
+    }
+
+    /// <summary>When a chosen slip is placed: PlaceBeforeKickoffMinutes before its first kickoff.</summary>
+    private DateTime PlaceAt(SlipPlan plan) => plan.Picks.Min(p => p.Match.Kickoff).AddMinutes(-_rules.PlaceBeforeKickoffMinutes);
+
+    /// <summary>Keeps the chosen slip (its matches stay taken for other accounts) and comes back at its placing time.</summary>
+    private Task<RunResult> Hold(Account account, SlipPlan plan, DateTime chosenAtUtc)
+    {
+        var placeAt = PlaceAt(plan);
+        account.NextCheckAt = placeAt;
+        var first = plan.Picks.MinBy(p => p.Match.Kickoff)!.Match;
+        return Done(account, "Holding",
+            $"Slip chosen at {EatTime(chosenAtUtc):dd/MM HH:mm} EAT ({plan.Picks.Count} picks @ {plan.CombinedOdds}); first match " +
+            $"{first.Home} v {first.Away} kicks off {EatTime(first.Kickoff):dd/MM HH:mm}. It is placed at {EatTime(placeAt):dd/MM HH:mm} EAT " +
+            $"({_rules.PlaceBeforeKickoffMinutes} min before kickoff).");
     }
 
     private static DateTime EatTime(DateTime utc) => TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), Eat.Zone);

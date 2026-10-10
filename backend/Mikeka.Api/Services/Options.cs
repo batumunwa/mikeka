@@ -27,6 +27,11 @@ public class BettingRules
     // Timing (Settings page, copied here by SettingsService).
     /// <summary>Matches are looked for from now over up to this many consecutive days (today first).</summary>
     public int MaxDaysAhead { get; set; } = 7;
+    /// <summary>
+    /// A chosen slip is held (its matches kept for this account) and placed this long before its first kickoff, after the
+    /// line-ups are out (user's choice 2026-10-10: 50). 0 = place as soon as it is chosen.
+    /// </summary>
+    public int PlaceBeforeKickoffMinutes { get; set; } = 50;
     /// <summary>Each account is checked again this long after its last check.</summary>
     public int CheckIntervalMinutes { get; set; } = 60;
     /// <summary>On one betting company, the next account is checked this long after the previous one finished.</summary>

@@ -499,7 +499,7 @@ public sealed class LeonbetClient(
         var titleEl = page.Locator($"text=/{PageText.TitlePattern(parts[1])}/i >> visible=true").First;
         if (!await IsVisible(titleEl, 8_000) && pick.Selection.Interval is not null)
             await OpenTabAsync(page, o.AllMarketsTab); // some interval blocks are listed under "All markets"
-        if (!await IsVisible(titleEl, 5_000)) throw new InvalidOperationException($"'{parts[1]}' is no longer offered for {teams}.");
+        if (!await IsVisible(titleEl, 5_000)) throw new PickGoneException($"'{parts[1]}' is no longer offered for {teams}.");
 
         var runners = await titleEl.EvaluateAsync<string[][]>(RunnersScript, -1);
         int i = Array.FindIndex(runners, r => want.IsMatch(r[0]));
@@ -509,7 +509,7 @@ public sealed class LeonbetClient(
         // Never at odds outside the rules, even if they moved since the slip was built.
         var odds = decimal.TryParse(price.Replace(',', '.'), NumberStyles.Number, CultureInfo.InvariantCulture, out var p) ? p : (decimal?)null;
         if (odds is null || odds < rules.MinPickOdds || odds > rules.MaxPickOdds)
-            throw new InvalidOperationException($"Odds moved for {teams}: '{name}' in '{parts[1]}' is now {price}.");
+            throw new PickGoneException($"Odds moved for {teams}: '{name}' in '{parts[1]}' is now {price}.");
         if (selected == "true") throw new InvalidOperationException($"'{name}' for {teams} was already in the bet slip.");
 
         await titleEl.EvaluateAsync<string[][]>(RunnersScript, i); // marks the button so it can be clicked like a person would

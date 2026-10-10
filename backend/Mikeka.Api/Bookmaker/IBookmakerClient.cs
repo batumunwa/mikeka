@@ -30,6 +30,9 @@ public interface IBookmakerClient : IAsyncDisposable
 /// </summary>
 public class BetUnconfirmedException(string message, Exception? inner = null) : Exception(message, inner);
 
+/// <summary>A pick of the chosen slip can no longer be taken (odds moved outside the range, market gone): choose a new slip.</summary>
+public class PickGoneException(string message) : InvalidOperationException(message);
+
 public interface IBookmakerFactory
 {
     Task<IBookmakerClient> CreateAsync(Account account, string password, CancellationToken ct);

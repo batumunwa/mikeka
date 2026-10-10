@@ -558,7 +558,7 @@ public sealed class OneWinClient(
 
         await page.OpenAsync(parts[0], log);
         await page.WaitForTimeoutAsync(3_000);
-        var titleEl = await FindBlockAsync(page, tab, title) ?? throw new InvalidOperationException($"'{title}' is no longer offered for {teams}.");
+        var titleEl = await FindBlockAsync(page, tab, title) ?? throw new PickGoneException($"'{title}' is no longer offered for {teams}.");
 
         var cells = await titleEl.EvaluateAsync<string[][]>(CellsScript, -1);
         int i = Array.FindIndex(cells, c =>
@@ -573,7 +573,7 @@ public sealed class OneWinClient(
         // Never at odds outside the rules, even if they moved since the slip was built.
         var odds = decimal.TryParse(price, NumberStyles.Number, CultureInfo.InvariantCulture, out var p) ? p : (decimal?)null;
         if (odds is null || odds < rules.MinPickOdds || odds > rules.MaxPickOdds)
-            throw new InvalidOperationException($"Odds moved for {teams}: '{name}' in '{title}' is now {price}.");
+            throw new PickGoneException($"Odds moved for {teams}: '{name}' in '{title}' is now {price}.");
         if (selected == "true") throw new InvalidOperationException($"'{name}' for {teams} was already in the bet slip.");
 
         await titleEl.EvaluateAsync<string[][]>(CellsScript, i); // marks the cell so it can be clicked like a person would

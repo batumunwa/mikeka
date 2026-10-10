@@ -366,7 +366,7 @@ public sealed class ColdbetClient(
         var line = pick.Selection.Line.ToString("0.##", CultureInfo.InvariantCulture);
         await OpenMatchAsync(page, parts[0]);
         if (!await SwitchSectionAsync(page, section))
-            throw new InvalidOperationException($"'{parts[1]}' markets are no longer offered for {teams}.");
+            throw new PickGoneException($"'{parts[1]}' markets are no longer offered for {teams}.");
 
         string target;
         if (parts[2] == "INTERVAL")
@@ -454,7 +454,7 @@ public sealed class ColdbetClient(
         }
         // Never bet at odds outside the rules, even if they moved since the slip was built.
         if (cell.Odds < rules.MinPickOdds || cell.Odds > rules.MaxPickOdds)
-            throw new InvalidOperationException($"Odds moved for {teams}: {cell.Label} is now {cell.Odds}.");
+            throw new PickGoneException($"Odds moved for {teams}: {cell.Label} is now {cell.Odds}.");
 
         // The bet slip is real text: check the click added exactly this pick. The canvas ignores an instant
         // press+release and the slip can take a few seconds to update, so: a human-like click, a long wait, one retry.
