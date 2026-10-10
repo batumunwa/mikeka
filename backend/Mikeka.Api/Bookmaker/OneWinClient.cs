@@ -59,6 +59,8 @@ public class OneWinOptions
     public string LoginButton { get; set; } = "[data-testid='header-auth-button']";
     /// <summary>When the automatic login hangs, how long to wait for the user to log in by hand in the tab.</summary>
     public int ManualLoginWaitMinutes { get; set; } = 10;
+    /// <summary>When the puzzle or a login by hand is still not done after this long, the user gets an email.</summary>
+    public int EmailAfterSeconds { get; set; } = 60;
     /// <summary>
     /// GeeTest "verify you are human" box (1win sets a gcaptcha4.geetest.com cookie, seen 2026-10-07). It seems to appear on
     /// the first login after Chrome starts. The system never solves it: it asks the user to, and then carries on.
@@ -88,19 +90,19 @@ public class OneWinOptions
     public string Balance { get; set; } = "[data-qa*='balance' i], [class*='balance' i]";
 }
 
-public class OneWinFactory(IOptions<OneWinOptions> options, SharedBrowser browser, IOptions<BettingRules> rules, ILogger<OneWinClient> log)
+public class OneWinFactory(IOptions<OneWinOptions> options, SharedBrowser browser, IOptions<BettingRules> rules, INotifier notifier, ILogger<OneWinClient> log)
 {
     public async Task<IBookmakerClient> CreateAsync(Account account, string password, CancellationToken ct)
     {
         var o = options.Value;
         var tab = await browser.OpenTabAsync(account, o.LoginButton, ct);
-        return new OneWinClient(tab, account, password, o, rules.Value.ForAccount(account), log);
+        return new OneWinClient(tab, account, password, o, rules.Value.ForAccount(account), notifier, log);
     }
 }
 
 public sealed class OneWinClient(
     BrowserTab browserTab, Account account, string password,
-    OneWinOptions o, BettingRules rules, ILogger log) : IBookmakerClient
+    OneWinOptions o, BettingRules rules, INotifier notifier, ILogger log) : IBookmakerClient
 {
     private readonly Uri _origin = new(new Uri(account.Url).GetLeftPart(UriPartial.Authority));
     private IPage? _page;
@@ -156,7 +158,9 @@ public sealed class OneWinClient(
                             $"1win asks to verify you are human (GeeTest puzzle) for {account.Username}. Please complete it in the 1win tab in Chrome " +
                             $"(the login form is already filled); the run continues by itself (waiting up to {o.ManualLoginWaitMinutes} minutes).");
                         await page.BringToFrontAsync();
-                        await page.Locator(o.LoginButton).First.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = o.ManualLoginWaitMinutes * 60_000 });
+                        await WaitForUserAsync(page, $"1win puzzle waiting for {account.Username}",
+                            $"1win shows the \"verify you are human\" puzzle at the login of {account.Username}. Please solve it in the 1win tab " +
+                            "of the Mikeka Chrome (the login form is already filled); the run then continues by itself.");
                         await browserTab.NoteAsync("1win: check completed; the run continues.");
                         done = true;
                         break;
@@ -176,7 +180,9 @@ public sealed class OneWinClient(
                 await page.BringToFrontAsync();
                 try
                 {
-                    await page.Locator(o.LoginButton).First.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = o.ManualLoginWaitMinutes * 60_000 });
+                    await WaitForUserAsync(page, $"1win login by hand needed for {account.Username}",
+                        $"1win did not finish the automatic login of {account.Username} (no puzzle shown). Please log in by hand as " +
+                        $"{account.Username} in the 1win tab of the Mikeka Chrome; the run then continues by itself.");
                     await page.WaitForTimeoutAsync(3_000);
                 }
                 catch (TimeoutException)
@@ -189,6 +195,27 @@ public sealed class OneWinClient(
             await SaveDebug(page, "logged-in", fullPage: false); // to find the balance on the logged-in page
         });
         log.LogInformation("Logged in to {Site} as {User}", _origin.Host, account.Username);
+    }
+
+    /// <summary>
+    /// Waits up to ManualLoginWaitMinutes for the user to finish the login in the tab (the header Login button goes). If it is
+    /// not done within EmailAfterSeconds, the user gets an email saying until when the run waits.
+    /// </summary>
+    private async Task WaitForUserAsync(IPage page, string subject, string body)
+    {
+        var loginButton = page.Locator(o.LoginButton).First;
+        var total = o.ManualLoginWaitMinutes * 60_000;
+        var first = Math.Min(o.EmailAfterSeconds * 1_000, total);
+        var until = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow.AddMilliseconds(total), Eat.Zone);
+        try
+        {
+            await loginButton.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = first });
+            return;
+        }
+        catch (TimeoutException) when (first < total) { }
+        try { await notifier.SendAsync(subject, $"{body}\n\nThe run waits until {until:HH:mm} EAT; after that it tries again at a later check.", CancellationToken.None); }
+        catch (Exception ex) { log.LogWarning(ex, "1win: could not send the email '{Subject}'", subject); }
+        await loginButton.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = total - first });
     }
 
     public async Task<decimal> GetBalanceAsync(CancellationToken ct)
