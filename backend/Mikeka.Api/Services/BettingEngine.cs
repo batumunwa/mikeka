@@ -111,7 +111,7 @@ public class BettingEngine(
         var stake = StakeCalculator.NextStake(account);
         var endOfToday = TimeZoneInfo.ConvertTimeToUtc(today.AddDays(1).ToDateTime(TimeOnly.MinValue), Eat.Zone);
         var accountRules = _rules.ForAccount(account);
-        // Matches already riding on open slips (all accounts, all sites) with the same market + minutes are not bet again.
+        // Matches already riding on open slips (all accounts of the same company) with the same market + minutes are not bet again.
         accountRules.Taken = await OpenPicks.LoadAsync(db, account.Id, nowUtc, _rules.MatchMinutes, ct);
 
         // A slip chosen by an earlier run that could not place it (login failed, …): continue with it while every match is
