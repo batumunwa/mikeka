@@ -17,6 +17,11 @@ public class OneWinMarket
     /// <summary>Tab and title of interval blocks, e.g. "Intervals" + "Total from {from} to {to} minute". Empty = none.</summary>
     public string IntervalTab { get; set; } = "";
     public string IntervalTitle { get; set; } = "";
+    /// <summary>
+    /// Yes/No block for the same minutes, read when the interval total has no 0.5 line, e.g. "From 1 to 10 minute inclusive.
+    /// Goal to be scored" (Ukraine Premier League, seen 2026-10-10). "No" there is the same bet as Under 0.5. Empty = none.
+    /// </summary>
+    public string IntervalYesNoTitle { get; set; } = "";
 }
 
 /// <summary>
@@ -49,7 +54,8 @@ public class OneWinOptions
 
     public OneWinMarket[] Markets { get; set; } =
     [
-        new() { Market = "goals", Tab = "", Title = "Total", IntervalTab = "Intervals", IntervalTitle = "Total from {from} to {to} minute" },
+        new() { Market = "goals", Tab = "", Title = "Total", IntervalTab = "Intervals", IntervalTitle = "Total from {from} to {to} minute",
+               IntervalYesNoTitle = "From {from} to {to} minute inclusive. Goal to be scored" },
         new() { Market = "corners", Tab = "Corners", Title = "Corners. Total" },
         new() { Market = "cards", Tab = "Cards/Penalties", Title = "Yellow cards. Total" },
         new() { Market = "fouls", Tab = "Fouls", Title = "Fouls. Total" }, // not seen on the site yet
@@ -293,6 +299,18 @@ public sealed class OneWinClient(
                         // All lines of that interval's total; the slip builder keeps the user's value (or 0.5 = "none").
                         foreach (var (side, line, odds) in await ReadTotalAsync(page, site.IntervalTab, title))
                             sels.Add(new Selection(site.Market, side, line, odds, $"{m.url}|{site.IntervalTab}|{title}|{side}|{line.ToString(CultureInfo.InvariantCulture)}", choice.IntervalKey));
+                        // Some leagues have no interval total, only "Goal to be scored" Yes/No: "No" = Under 0.5, "Yes" = Over 0.5.
+                        if (!string.IsNullOrEmpty(site.IntervalYesNoTitle)
+                            && !sels.Any(x => x.Market == site.Market && x.Interval == choice.IntervalKey && x.Line == 0.5m))
+                        {
+                            var yesNo = site.IntervalYesNoTitle.Replace("{from}", choice.IntervalFrom.ToString()).Replace("{to}", choice.IntervalTo.ToString());
+                            foreach (var (name, odds) in await ReadYesNoAsync(page, site.IntervalTab, yesNo))
+                            {
+                                var side = name == "No" ? "Under" : "Over";
+                                sels.Add(new Selection(site.Market, side, 0.5m, odds, $"{m.url}|{site.IntervalTab}|{yesNo}|{side}|0.5", choice.IntervalKey,
+                                    $"Goal in minutes {choice.IntervalFrom}–{choice.IntervalTo}: {name}"));
+                            }
+                        }
                     }
                     if (sels.Any(x => x.Market == choice.Market && x.Side == choice.Side && x.Interval == choice.IntervalKey
                                       && (choice.RequiredLine is not { } want || x.Line == want)
@@ -384,6 +402,17 @@ public sealed class OneWinClient(
         var list = rows.Select(PageText.ParseTotalRow).Where(r => r.HasValue).Select(r => r!.Value).ToList();
         if (list.Count == 0) log.LogInformation("1win: '{Title}' found but no rows parsed; raw: {Rows}", title, string.Join(" | ", rows.Take(6)));
         return list;
+    }
+
+    /// <summary>Opens a tab (if any) and reads the Yes/No buttons of the block titled exactly <paramref name="title"/>.</summary>
+    private async Task<List<(string name, decimal odds)>> ReadYesNoAsync(IPage page, string tab, string title)
+    {
+        var titleEl = await FindBlockAsync(page, tab, title);
+        if (titleEl is null) return [];
+        var cells = await titleEl.EvaluateAsync<string[][]>(CellsScript, -1);
+        return cells.Where(c => c[0] is "Yes" or "No")
+            .Select(c => (c[0], decimal.TryParse(c[1], NumberStyles.Number, CultureInfo.InvariantCulture, out var p) ? p : 0m))
+            .Where(c => c.Item2 > 0).ToList();
     }
 
     private async Task<ILocator?> FindBlockAsync(IPage page, string tab, string title)
@@ -534,6 +563,7 @@ public sealed class OneWinClient(
         var cells = await titleEl.EvaluateAsync<string[][]>(CellsScript, -1);
         int i = Array.FindIndex(cells, c =>
         {
+            if (c[0] is "Yes" or "No") return line == 0.5m && side == (c[0] == "No" ? "Under" : "Over"); // "Goal to be scored" block
             var m = Regex.Match(c[0], @"^(Under|Over)\s+(\d+(?:\.\d+)?)$", RegexOptions.IgnoreCase);
             return m.Success && m.Groups[1].Value.Equals(side, StringComparison.OrdinalIgnoreCase)
                    && decimal.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture) == line;
@@ -559,12 +589,13 @@ public sealed class OneWinClient(
     }
 
     /// <summary>
-    /// From a block title, its Over/Under odds buttons as [name, price, selected] (button text "Under 9.5" + "1.69";
-    /// a chosen one has a "_selected_" class). With mark ≥ 0 that button also gets data-mikeka-pick="1".
+    /// From a block title, its Over/Under (or Yes/No) odds buttons as [name, price, selected] (button text "Under 9.5" +
+    /// "1.69", or "No" + "1.21"; a chosen one has a "_selected_" class). With mark ≥ 0 that button also gets data-mikeka-pick="1".
     /// </summary>
     private const string CellsScript = @"(title, mark) => {
         document.querySelectorAll('[data-mikeka-pick]').forEach(e => e.removeAttribute('data-mikeka-pick'));
-        const isCell = b => /^(Under|Over) [\d.]+ [\d.]+$/.test(b.innerText.replace(/\s+/g, ' ').trim());
+        const pattern = /^((?:Under|Over) [\d.]+|Yes|No) ([\d.]+)$/;
+        const isCell = b => pattern.test(b.innerText.replace(/\s+/g, ' ').trim());
         let n = title;
         for (let i = 0; i < 8 && n.parentElement; i++) {
             n = n.parentElement;
@@ -572,7 +603,7 @@ public sealed class OneWinClient(
             if (!cells.length) continue;
             if (mark >= 0 && cells[mark]) cells[mark].setAttribute('data-mikeka-pick', '1');
             return cells.map(b => {
-                const t = b.innerText.replace(/\s+/g, ' ').trim().match(/^((?:Under|Over) [\d.]+) ([\d.]+)$/);
+                const t = b.innerText.replace(/\s+/g, ' ').trim().match(pattern);
                 return [t[1], t[2], /_selected_/.test(b.className) ? 'true' : ''];
             });
         }
