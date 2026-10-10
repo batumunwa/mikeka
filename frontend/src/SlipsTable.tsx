@@ -82,6 +82,9 @@ export function SlipsTable({ slips, currency, onChanged }: { slips: Slip[]; curr
                         <span className="kick">{eat(p.kickoff)}</span> <b>{p.home} v {p.away}</b>
                         <br /><span className="small market">{pickText(p)}</span> <span className="odd">{p.odds.toFixed(2)}</span>
                         {s.status === 'Won' && <span className="pick-mark won" title="Won">✓</span>}
+                        {s.status === 'Pending' && p.result && (
+                          <span className={`pick-mark ${p.result.toLowerCase()}`} title={p.result === 'Won' ? 'This pick won' : 'This pick lost'}>{p.result === 'Won' ? '✓' : '✕'}</span>
+                        )}
                         {s.status === 'Lost' && p.id != null && (
                           <span className="pick-result" title="Which picks lost this slip? (for the statistics)">
                             <button className={`pick-btn won ${p.result === 'Won' ? 'on' : ''}`} disabled={busy === s.id}

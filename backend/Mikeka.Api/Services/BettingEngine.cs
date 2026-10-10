@@ -302,7 +302,7 @@ public class BettingEngine(
         slip.Status = won ? SlipStatus.Won : SlipStatus.Lost;
         slip.SettledAt = clock.GetUtcNow().UtcDateTime;
         slip.BalanceAfter = balance;
-        if (won) foreach (var p in slip.Picks) p.Result = PickResult.Won; // a lost slip's losing picks are marked by the user
+        if (won) foreach (var p in slip.Picks) p.Result = PickResult.Won; // a lost slip's picks: read from the site (1win) or marked by the user
         account.LastBalance = balance ?? account.LastBalance;
         account.LossStreak = won ? 0 : account.LossStreak + 1;
         await Log(account, $"Slip #{slip.Id} {slip.Status}. Loss streak now {account.LossStreak}.");

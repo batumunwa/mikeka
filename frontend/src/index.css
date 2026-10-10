@@ -335,6 +335,7 @@ tr.slip.placed { --row-line: var(--won); --row-bg: var(--won-bg); }
 .picks li.pick-lost { box-shadow: inset 3px 0 0 var(--lost); padding-left: 6px; }
 .picks li.pick-won { box-shadow: inset 3px 0 0 var(--won); padding-left: 6px; }
 .pick-mark.won { color: var(--won); margin-left: 6px; font-weight: 700; }
+.pick-mark.lost { color: var(--lost); margin-left: 6px; font-weight: 700; }
 .pick-result { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; }
 .pick-btn { min-width: 26px; padding: 0 6px; height: 22px; font-size: 0.8rem; line-height: 1; border-radius: 6px;
   background: transparent; border: 1px solid var(--line); color: var(--muted, inherit); }

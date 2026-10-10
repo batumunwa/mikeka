@@ -153,7 +153,7 @@ public static class SlipBuilder
             && (SameTeam(t.Home, match.Home) || SameTeam(t.Away, match.Away)));
     }
 
-    private static bool SameTeam(string a, string b)
+    public static bool SameTeam(string a, string b)
     {
         static string N(string s) => System.Text.RegularExpressions.Regex.Replace(s.ToLowerInvariant(), @"[^\p{L}\p{N}]", "");
         string x = N(a), y = N(b);

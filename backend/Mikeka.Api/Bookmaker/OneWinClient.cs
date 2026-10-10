@@ -651,29 +651,60 @@ public sealed class OneWinClient(
             return BetOutcome.Pending;
         }
         log.LogInformation("1win: slip #{Id} in history → {Outcome}: {Text}", slip.Id, card.Outcome, card.Text);
-        await SaveBetDetailAsync(page, card.Id);
+        await ReadPickResultsAsync(page, slip, card.Id);
         return card.Outcome;
     }
 
     /// <summary>
-    /// Opens the bet's own page once (each history card links to /betting/bets-history/{id}, seen 2026-10-10) and saves it,
-    /// to learn how to read each pick's result (the list only says "5 events"). Read only; any problem is just logged.
+    /// Each pick's own result (✓/✕ on the slip and the pick statistics), from the bet's page /betting/bets-history/{id}
+    /// (seen 2026-10-10): one card per event with the teams and "Won" / "Lost" / "Opened". Only opened while a played pick
+    /// has no result yet. Read only; any problem is just logged.
     /// </summary>
-    private async Task SaveBetDetailAsync(IPage page, string betId)
+    private async Task ReadPickResultsAsync(IPage page, Slip slip, string betId)
     {
+        var played = DateTime.UtcNow.AddMinutes(-15);
+        if (!slip.Picks.Any(p => p.Result is null && p.Kickoff < played)) return;
         try
         {
-            if (Directory.Exists(o.DebugDir) && Directory.GetFiles(o.DebugDir, $"*-bet-page-{betId}*.html").Length > 0) return;
             await page.OpenAsync(At($"/betting/bets-history/{betId}"), log);
-            await page.WaitForTimeoutAsync(6_000); // slow connection: let the events load
-            var shot = await SaveDebug(page, $"bet-page-{betId}");
-            log.LogInformation("1win: bet {BetId} page saved ({Shot})", betId, shot);
+            string[][] events = [];
+            for (int attempt = 0; attempt < 5 && events.Length == 0; attempt++) // slow connection: the events load late
+            {
+                await page.WaitForTimeoutAsync(3_000);
+                events = await page.EvaluateAsync<string[][]>(BetEventsScript);
+            }
+            if (events.Length == 0)
+            {
+                var shot = await SaveDebug(page, $"bet-page-{betId}");
+                log.LogWarning("1win: bet {BetId}: no events read on its page (screenshot {Shot})", betId, shot);
+                return;
+            }
+            foreach (var pick in slip.Picks)
+            {
+                var ev = events.FirstOrDefault(e => SlipBuilder.SameTeam(e[0], pick.Home) && SlipBuilder.SameTeam(e[1], pick.Away))
+                         ?? events.FirstOrDefault(e => SlipBuilder.SameTeam(e[0], pick.Home) || SlipBuilder.SameTeam(e[1], pick.Away));
+                if (ev is null) { log.LogInformation("1win: bet {BetId}: {Home} v {Away} not on its page", betId, pick.Home, pick.Away); continue; }
+                PickResult? result = ev[2].ToLowerInvariant() switch { "won" => PickResult.Won, "lost" => PickResult.Lost, _ => null };
+                if (result is not null && pick.Result != result)
+                {
+                    pick.Result = result;
+                    log.LogInformation("1win: slip #{Id}: {Home} v {Away} ({Market}) → {Result}", slip.Id, pick.Home, pick.Away, ev[3], result);
+                }
+            }
         }
         catch (Exception ex) when (ex is PlaywrightException or TimeoutException)
         {
-            log.LogInformation("1win: bet {BetId} not opened in the history: {Error}", betId, ex.Message.Split('\n')[0]);
+            log.LogInformation("1win: bet {BetId}: pick results not read: {Error}", betId, ex.Message.Split('\n')[0]);
         }
     }
+
+    /// <summary>Events on a bet's page as [home, away, status, market], e.g. ["Brann", "Viking", "Won", "Total from 1 to 10 minute, Under 0.5"].</summary>
+    private const string BetEventsScript = @"() =>
+        [...document.querySelectorAll(""[data-scope='Card'][data-testid^='selection-']"")].map(c => {
+            const names = [...c.querySelectorAll(""[data-scope='TeamNames'] [class*='_name_']"")].map(e => e.textContent.trim());
+            const text = sel => (c.querySelector(sel)?.textContent || '').trim();
+            return [names[0] || '', names[1] || '', text(""[class*='_status_']""), text(""[class*='_selectionTitle_']"")];
+        })";
 
     /// <summary>1win's bet ID, e.g. "330497469" (older slips have "1win-yyyyMMdd-HHmmss").</summary>
     private static bool IsBetId(string? reference) => reference is { Length: >= 5 } && reference.All(char.IsDigit);
