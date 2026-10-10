@@ -5,6 +5,7 @@ using Mikeka.Api.Data;
 using Mikeka.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.AddProvider(new FileLoggerProvider(Path.Combine(builder.Environment.ContentRootPath, "logs"))); // the API window's output, also on disk
 
 builder.Services.AddControllers()
     .AddJsonOptions(o => o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));

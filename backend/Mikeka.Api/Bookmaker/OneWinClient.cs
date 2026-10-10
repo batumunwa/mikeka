@@ -141,6 +141,8 @@ public sealed class OneWinClient(
                 await page.Locator(o.PhoneInput).First.FillAsync(Regex.Replace(account.Username, @"^\+?255", ""), new() { Timeout = 15_000 });
             await page.Locator(o.PasswordInput).First.FillAsync(password, new() { Timeout = 15_000 });
             await page.Locator(o.LoginSubmit).First.ClickAsync(new() { Timeout = 15_000 });
+            await page.WaitForTimeoutAsync(3_000);
+            await SaveDebug(page, "login-clicked", fullPage: false); // what 1win shows right after the click (puzzle, spinner, error)
             // The button spins while 1win logs in; done when the header Login button has gone. A GeeTest check is handed
             // to the user at once (it is never solved by the system); the form stays filled, so solving it finishes the login.
             try
