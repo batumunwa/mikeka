@@ -128,7 +128,8 @@ export function SettingsPanel({ onClose, onSaved }: { onClose: () => void; onSav
         <p className="muted small">
           Matches are looked for without logging in; the system logs in only to place a slip or read a result.
           A slip's result is read when a match ends (kickoff + {form.matchMinutes} min) and the next match ends more than{' '}
-          {form.settlementGapMinutes} min later, and at the last match's end. If the slip has already lost, the next slip is placed at once.
+          {form.settlementGapMinutes} min later, and at the last match's end. If the slip has already lost, the next slip is chosen at once and placed 50 min before its first kickoff.
+          "Look for matches over" 1 = today only, 2 = today and tomorrow (today's matches are always tried first).
         </p>
       </fieldset>
 
