@@ -79,6 +79,7 @@ export function SlipsTable({ slips, currency, onChanged }: { slips: Slip[]; curr
                     {s.picks.map((p, i) => (
                       <li key={i} className={p.result ? `pick-${p.result.toLowerCase()}` : ''}>
                         <span className="kick">{eat(p.kickoff)}</span> <b>{p.home} v {p.away}</b>
+                        {p.league && <><br /><span className="pick-league">{p.league}</span></>}
                         <br /><span className="small market">{pickText(p)}</span> <span className="odd">{p.odds.toFixed(2)}</span>
                         {s.status === 'Won' && <span className="pick-mark won" title="Won">✓</span>}
                         {s.status === 'Lost' && p.id != null && (

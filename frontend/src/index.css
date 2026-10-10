@@ -286,6 +286,7 @@ tr.slip.skipped { --row-line: var(--skip); --row-bg: var(--skip-bg); }
 .slips td.slip-id { color: var(--accent); font-weight: 800; }
 .slips .kick { color: var(--draft); font-size: 0.8rem; font-weight: 600; font-variant-numeric: tabular-nums; }
 .slips .market { color: var(--text); }
+.slips .pick-league { color: var(--muted); font-size: 0.78rem; }
 .slips .odd { display: inline-block; font-size: 0.8rem; font-weight: 700; padding: 0 7px; border-radius: 6px; background: var(--card); color: var(--accent); border: 1px solid var(--accent); }
 .total-odds { display: inline-block; font-weight: 800; padding: 3px 9px; border-radius: 7px; background: var(--accent); color: #fff; }
 .slips .stake { font-weight: 700; }
