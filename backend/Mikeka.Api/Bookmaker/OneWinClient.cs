@@ -728,13 +728,17 @@ public sealed class OneWinClient(
             {
                 await page.OpenAsync(At(path), log);
                 await page.WaitForTimeoutAsync(3_000);
+                // On a slow connection the bets appear some seconds after the page (2026-10-10: none read at 3 s, all there
+                // later): read again until they show, up to about 15 s more.
                 for (int attempt = 1; ; attempt++)
                 {
-                    try { cards = await page.EvaluateAsync<string[]>(HistoryCardsScript); break; }
-                    catch (PlaywrightException ex) when (attempt < 3 && ex.Message.Contains("context was destroyed", StringComparison.OrdinalIgnoreCase))
+                    try
                     {
-                        await page.WaitForTimeoutAsync(3_000);
+                        cards = await page.EvaluateAsync<string[]>(HistoryCardsScript);
+                        if (cards.Length > 0 || attempt >= 6) break;
                     }
+                    catch (PlaywrightException ex) when (attempt < 6 && ex.Message.Contains("context was destroyed", StringComparison.OrdinalIgnoreCase)) { }
+                    await page.WaitForTimeoutAsync(3_000);
                 }
             }
             catch (Exception ex) when (ex is PlaywrightException or TimeoutException)
