@@ -28,6 +28,9 @@ public class BettingEngine(
     /// <summary>One run per account at a time (scheduler and "Run now" never overlap, so a slip is never placed twice).</summary>
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, SemaphoreSlim> Running = new();
 
+    /// <summary>Choosing a slip (open picks read + build + save) is done by one account at a time, all sites together.</summary>
+    private static readonly SemaphoreSlim ChooseLock = new(1, 1);
+
     /// <param name="manual">"Run now": reads the open slip's result now instead of waiting for its next check time.</param>
     public async Task<RunResult> RunAsync(int accountId, bool manual, CancellationToken ct)
     {
@@ -141,24 +144,32 @@ public class BettingEngine(
                 return await Done(account, "NoMatches",
                     $"No matches offering {Describe(account)} in {string.Join(", ", account.Leagues)} in the next {_rules.MaxDaysAhead} days. Next check in {_rules.CheckIntervalMinutes} min.");
 
-            for (int d = 0; d < _rules.MaxDaysAhead && plan is null; d++)
+            // Reading the matches takes minutes and other sites' runs go on meanwhile: one account chooses at a time, with the
+            // open and chosen picks read again just before, so two accounts never take the same match + minutes together.
+            await ChooseLock.WaitAsync(ct);
+            try
             {
-                plan = SlipBuilder.Build(matches.Where(m => m.Kickoff < endOfToday.AddDays(d)), accountRules);
-                if (plan is not null)
-                    await Log(account, d == 0 ? "Slip built from today's matches." : $"Today's matches were not enough; slip built with matches up to {today.AddDays(d):dd/MM}.");
+                accountRules.Taken = await OpenPicks.LoadAsync(db, account.Id, clock.GetUtcNow().UtcDateTime, _rules.MatchMinutes, ct);
+                for (int d = 0; d < _rules.MaxDaysAhead && plan is null; d++)
+                {
+                    plan = SlipBuilder.Build(matches.Where(m => m.Kickoff < endOfToday.AddDays(d)), accountRules);
+                    if (plan is not null)
+                        await Log(account, d == 0 ? "Slip built from today's matches." : $"Today's matches were not enough; slip built with matches up to {today.AddDays(d):dd/MM}.");
+                }
+                if (plan is null)
+                    return await Done(account, "NoSlip",
+                        $"No combination of up to {accountRules.MaxMatches} picks at {accountRules.MinPickOdds}–{accountRules.MaxPickOdds} reaches " +
+                        $"{accountRules.MinCombinedOdds}–{accountRules.MaxCombinedOdds} within {_rules.MaxDaysAhead} days in {string.Join(", ", account.Leagues)}. " +
+                        $"Next check in {_rules.CheckIntervalMinutes} min.");
+
+                // Last guard: never send two selections of one match to a site (sites refuse them in one accumulator).
+                if (plan.Picks.GroupBy(p => SlipBuilder.MatchKey(p.Match)).FirstOrDefault(g => g.Count() > 1) is { } twice)
+                    return await Done(account, "NotFilled", $"The slip has {twice.First().Match.Home} v {twice.First().Match.Away} twice; nothing was sent to {account.Site}.");
+
+                // Kept until placed: if the login or the placing fails, the next run continues from here.
+                PreparedSlips.Save(account.Id, new PreparedSlips.Prepared(plan, stake, nowUtc, 0));
             }
-            if (plan is null)
-                return await Done(account, "NoSlip",
-                    $"No combination of up to {accountRules.MaxMatches} picks at {accountRules.MinPickOdds}–{accountRules.MaxPickOdds} reaches " +
-                    $"{accountRules.MinCombinedOdds}–{accountRules.MaxCombinedOdds} within {_rules.MaxDaysAhead} days in {string.Join(", ", account.Leagues)}. " +
-                    $"Next check in {_rules.CheckIntervalMinutes} min.");
-
-            // Last guard: never send two selections of one match to a site (sites refuse them in one accumulator).
-            if (plan.Picks.GroupBy(p => SlipBuilder.MatchKey(p.Match)).FirstOrDefault(g => g.Count() > 1) is { } twice)
-                return await Done(account, "NotFilled", $"The slip has {twice.First().Match.Home} v {twice.First().Match.Away} twice; nothing was sent to {account.Site}.");
-
-            // Kept until placed: if the login or the placing fails, the next run continues from here.
-            PreparedSlips.Save(account.Id, new PreparedSlips.Prepared(plan, stake, nowUtc, 0));
+            finally { ChooseLock.Release(); }
             // Placed only shortly before the first kickoff (after the line-ups); until then the matches are kept for this account.
             if (PlaceAt(plan) > nowUtc.AddMinutes(1))
                 return await Hold(account, plan, nowUtc);
