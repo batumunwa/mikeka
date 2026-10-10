@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
 import { api, MARKET_NAMES, SITE_NAMES, SITE_URLS, siteOfUrl, type Account, type MarketChoice, type MarketKey, type SaveAccount, type Settings, type Site } from './api'
 import { Modal } from './ui'
 
@@ -11,13 +11,21 @@ const ordinal = (n: number) => `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 
 /** Tag input for league names: Enter, comma or leaving the box adds the typed league. */
 function LeagueTags({ leagues, onChange, label }: { leagues: string[]; onChange: (l: string[]) => void; label: string }) {
   const [text, setText] = useState('')
-  const add = () => {
-    // Several leagues typed or pasted at once ("A. X, B. Y") become separate tags.
+  const addFrom = (value: string) => {
+    // Several leagues typed or pasted at once ("A. X, B. Y", or one per line) become separate tags.
     const next = [...leagues]
-    for (const l of text.split(/[,;]/).map((x) => x.trim()).filter(Boolean))
+    for (const l of value.split(/[,;\r\n\t]/).map((x) => x.trim()).filter(Boolean))
       if (!next.some((x) => x.toLowerCase() === l.toLowerCase())) next.push(l)
     if (next.length !== leagues.length) onChange(next)
     setText('')
+  }
+  const add = () => addFrom(text)
+  const onPaste = (e: ClipboardEvent<HTMLInputElement>) => {
+    // A one-line box would join pasted lines into one name: split them here instead.
+    const pasted = e.clipboardData.getData('text')
+    if (!/[,;\r\n\t]/.test(pasted)) return
+    e.preventDefault()
+    addFrom(text + pasted)
   }
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' || e.key === ',') {
@@ -33,7 +41,7 @@ function LeagueTags({ leagues, onChange, label }: { leagues: string[]; onChange:
           <button type="button" aria-label={`Remove ${l}`} onClick={() => onChange(leagues.filter((x) => x !== l))}>×</button>
         </span>
       ))}
-      <input value={text} aria-label={label} onChange={(e) => setText(e.target.value)} onKeyDown={onKey} onBlur={add}
+      <input value={text} aria-label={label} onChange={(e) => setText(e.target.value)} onKeyDown={onKey} onBlur={add} onPaste={onPaste}
         placeholder={leagues.length ? 'Add another league…' : 'Country. League, as named on the site, e.g. Argentina. Liga Profesional'} />
     </div>
   )
