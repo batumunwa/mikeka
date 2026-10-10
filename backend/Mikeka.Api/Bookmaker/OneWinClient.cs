@@ -656,23 +656,18 @@ public sealed class OneWinClient(
     }
 
     /// <summary>
-    /// Opens the bet's card once and saves what 1win shows inside (its events and their results), to learn how to read each
-    /// pick's result (the list only says "5 events"). Read only; any problem is just logged.
+    /// Opens the bet's own page once (each history card links to /betting/bets-history/{id}, seen 2026-10-10) and saves it,
+    /// to learn how to read each pick's result (the list only says "5 events"). Read only; any problem is just logged.
     /// </summary>
     private async Task SaveBetDetailAsync(IPage page, string betId)
     {
         try
         {
-            if (Directory.Exists(o.DebugDir) && Directory.GetFiles(o.DebugDir, $"*-bet-detail-{betId}*.html").Length > 0) return;
-            var id = page.GetByText(new Regex($@"\bID {betId}\b")).First;
-            if (!await IsVisible(id, 5_000)) return;
-            await DismissPopupsAsync(page);
-            await id.ClickAsync(new() { Timeout = 10_000 });
-            await page.WaitForTimeoutAsync(3_000);
-            var shot = await SaveDebug(page, $"bet-detail-{betId}");
-            log.LogInformation("1win: bet {BetId} opened in the history and saved ({Shot})", betId, shot);
-            await page.Keyboard.PressAsync("Escape");
-            await page.WaitForTimeoutAsync(1_000);
+            if (Directory.Exists(o.DebugDir) && Directory.GetFiles(o.DebugDir, $"*-bet-page-{betId}*.html").Length > 0) return;
+            await page.OpenAsync(At($"/betting/bets-history/{betId}"), log);
+            await page.WaitForTimeoutAsync(6_000); // slow connection: let the events load
+            var shot = await SaveDebug(page, $"bet-page-{betId}");
+            log.LogInformation("1win: bet {BetId} page saved ({Shot})", betId, shot);
         }
         catch (Exception ex) when (ex is PlaywrightException or TimeoutException)
         {
