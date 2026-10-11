@@ -10,7 +10,7 @@ namespace Mikeka.Api.Controllers;
 public record AccountDto(int Id, string Name, string Url, string Site, string Username, string Currency, bool IsActive,
     List<string> Leagues, List<MarketChoice> Markets, int LossStreak, bool Stopped, decimal? LastBalance, decimal NextStake, decimal BaseStake,
     int MaxLosses, decimal MinPickOdds, decimal MaxPickOdds, decimal MinCombinedOdds, decimal MaxCombinedOdds,
-    DateTime? NextCheckAt, int MaxPicks);
+    DateTime? NextCheckAt, int MaxPicks, bool BettingPaused);
 
 public record SaveAccountRequest(
     [Required] string Name,
@@ -38,7 +38,7 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
 {
     private AccountDto ToDto(Account a) => new(a.Id, a.Name, a.Url, a.Site, a.Username, a.Currency, a.IsActive,
         a.Leagues, a.Markets, a.LossStreak, a.Stopped, a.LastBalance, StakeCalculator.NextStake(a), a.BaseStake,
-        a.MaxLosses, a.MinPickOdds, a.MaxPickOdds, a.MinCombinedOdds, a.MaxCombinedOdds, a.NextCheckAt, a.MaxPicks);
+        a.MaxLosses, a.MinPickOdds, a.MaxPickOdds, a.MinCombinedOdds, a.MaxCombinedOdds, a.NextCheckAt, a.MaxPicks, a.BettingPaused);
 
     [HttpGet]
     public async Task<IEnumerable<AccountDto>> List() =>
@@ -143,6 +143,23 @@ public class AccountsController(MikekaDb db, AccountSecrets secrets, Microsoft.E
         a.Stopped = false;
         a.LossStreak = 0;
         db.RunLogs.Add(new RunLog { AccountId = id, Message = $"Account reset by user; stake back to {a.BaseStake:N0} {a.Currency}." });
+        await db.SaveChangesAsync();
+        return ToDto(a);
+    }
+
+    /// <summary>"Stop betting" (paused = true) / "Resume betting" by hand. Paused: no new slips; open slips are still read.</summary>
+    [HttpPost("{id:int}/betting")]
+    public async Task<ActionResult<AccountDto>> SetBetting(int id, [FromQuery] bool paused)
+    {
+        var a = await db.Accounts.FindAsync(id);
+        if (a is null) return NotFound();
+        if (a.BettingPaused == paused) return ToDto(a);
+        a.BettingPaused = paused;
+        if (paused) PreparedSlips.Remove(id); // a chosen slip not placed yet is dropped
+        else a.NextCheckAt = null; // resumed: look for a slip at once
+        db.RunLogs.Add(new RunLog { AccountId = id, Message = paused
+            ? $"Betting stopped by user for {a.Name}; open slips are still checked."
+            : $"Betting resumed by user for {a.Name}." });
         await db.SaveChangesAsync();
         return ToDto(a);
     }

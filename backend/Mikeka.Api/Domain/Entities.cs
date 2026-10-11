@@ -36,6 +36,8 @@ public class Account
     public int LossStreak { get; set; }
     /// <summary>Set after MaxLosses losses in a row. Betting resumes only after a manual reset.</summary>
     public bool Stopped { get; set; }
+    /// <summary>Stopped by hand ("Stop betting"): no new slips; open slips' results are still read. "Resume betting" clears it.</summary>
+    public bool BettingPaused { get; set; }
     public decimal? LastBalance { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     /// <summary>When the scheduler next checks this account (matches, or the open slip's result). Null = as soon as possible.</summary>

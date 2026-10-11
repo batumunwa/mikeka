@@ -76,6 +76,13 @@ public class BettingEngine(
             }
         }
 
+        // Stopped by hand: nothing new is chosen or placed; only open slips (below) are read.
+        if (account.BettingPaused)
+        {
+            PreparedSlips.Remove(account.Id);
+            if (pending.Count == 0) return await Done(account, "Paused", "Betting stopped by user. Press Resume betting to continue.");
+        }
+
         // A chosen slip waiting for its placing time: nothing to do on the site yet (checked again below if anything changed).
         if (pending.Count == 0 && PreparedSlips.Get(account.Id) is { } held && PlaceAt(held.Plan) > nowUtc.AddMinutes(1)
             && held.Stake == StakeCalculator.NextStake(account) && held.Reuses < PreparedSlips.MaxReuses)
@@ -104,6 +111,8 @@ public class BettingEngine(
             if (account.Stopped)
                 return await Done(account, "Stopped", $"{account.LossStreak} consecutive losses. Betting stopped.");
         }
+        if (account.BettingPaused)
+            return await Done(account, "Paused", "Open slips read; betting stopped by user, so no new slip.");
 
         // 2) Matches from the public pages (no login), all the account's leagues together, earliest day first: today's
         //    matches alone; if they can't make a slip, today + tomorrow; and so on up to MaxDaysAhead days. So an earlier

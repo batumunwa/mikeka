@@ -91,6 +91,8 @@ export interface Account {
   nextCheckAt: string | null
   /** Most picks one slip may hold. */
   maxPicks: number
+  /** Betting stopped by hand: no new slips; open slips are still read. */
+  bettingPaused: boolean
 }
 
 export interface SaveAccount {
@@ -266,6 +268,7 @@ export const api = {
   updateAccount: (id: number, a: SaveAccount) => call<Account>(`/accounts/${id}`, { method: 'PUT', body: JSON.stringify(a) }),
   savedPassword: (id: number) => call<{ password: string }>(`/accounts/${id}/password`),
   resetAccount: (id: number) => call<Account>(`/accounts/${id}/reset`, { method: 'POST' }),
+  setBetting: (id: number, paused: boolean) => call<Account>(`/accounts/${id}/betting?paused=${paused}`, { method: 'POST' }),
   disableAccount: (id: number) => call<void>(`/accounts/${id}`, { method: 'DELETE' }),
   check: (id: number) => call<{ ok: boolean; balance: number | null; message: string }>(`/accounts/${id}/check`, { method: 'POST' }),
   readMatches: (id: number) => call<MatchesResult>(`/accounts/${id}/matches`, { method: 'POST' }),

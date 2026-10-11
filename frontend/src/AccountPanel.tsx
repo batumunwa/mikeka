@@ -24,7 +24,7 @@ function summary(message: string) {
 function kind(l: RunLog): 'error' | 'done' | 'skip' | 'info' {
   if (l.level === 'Error') return 'error'
   if (/^(Filled|Placed|Draft slip|Slip #\d+ Won)|Slip ready|Connection check OK|Balance checked/.test(l.message)) return 'done'
-  if (/^(Skipped|NotSupported|NotFilled|NotPlaced|Waiting|Stopped)|Lost\./.test(l.message)) return 'skip'
+  if (/^(Skipped|NotSupported|NotFilled|NotPlaced|Waiting|Stopped|Paused)|Lost\./.test(l.message)) return 'skip'
   return 'info'
 }
 
