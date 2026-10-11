@@ -242,6 +242,17 @@ export default function App() {
                   </button>
                   <button className="ghost" onClick={() => setAnalysing(a)}>Analyse</button>
                   <button className="ghost" onClick={() => setEditing(a)}>Edit</button>
+                  {a.isActive && !a.stopped && (a.bettingPaused ? (
+                    <button className="ghost" disabled={busy === a.id} title="Choose and place new slips again"
+                      onClick={() => act(a.id, () => api.setBetting(a.id, false), () => `${a.name}: betting resumed.`)}>
+                      ▶ Resume betting
+                    </button>
+                  ) : (
+                    <button className="ghost" disabled={busy === a.id} title="No new slips for this account; open slips are still checked for results"
+                      onClick={() => act(a.id, () => api.setBetting(a.id, true), () => `${a.name}: betting stopped. Open slips are still checked.`)}>
+                      ■ Stop bet
+                    </button>
+                  ))}
                 </div>
               </details>
               <button className="ghost" onClick={() => setSelected(a.id)}>Open</button>
@@ -265,17 +276,6 @@ export default function App() {
                 }}>
                 {busy === a.id ? 'Running…' : '▶ Run now'}
               </button>
-              {a.isActive && !a.stopped && (a.bettingPaused ? (
-                <button className="ghost" disabled={busy === a.id} title="Choose and place new slips again"
-                  onClick={() => act(a.id, () => api.setBetting(a.id, false), () => `${a.name}: betting resumed.`)}>
-                  ▶ Resume betting
-                </button>
-              ) : (
-                <button className="warn" disabled={busy === a.id} title="No new slips for this account; open slips are still checked for results"
-                  onClick={() => act(a.id, () => api.setBetting(a.id, true), () => `${a.name}: betting stopped. Open slips are still checked.`)}>
-                  ■ Stop bet
-                </button>
-              ))}
               {a.stopped && (
                 <button className="warn" disabled={busy === a.id}
                   onClick={() => act(a.id, () => api.resetAccount(a.id), () => `${a.name} reset; next stake ${money(a.baseStake, a.currency)}.`)}>
