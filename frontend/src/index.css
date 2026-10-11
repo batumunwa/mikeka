@@ -237,6 +237,8 @@ button.on-dark.ghost { background: transparent; color: #fff; border-color: rgb(2
 .mini b { font-variant-numeric: tabular-nums; }
 .waiting { background: var(--pending-bg); color: var(--pending); border-radius: 8px; padding: 8px 10px; font-size: 0.85rem; font-weight: 600; }
 .card-actions { margin-top: auto; }
+/* Buttons share the width (also after wrapping), so no row is left half empty. */
+.card-actions > button { flex: 1 1 auto; white-space: nowrap; }
 button.run { background: var(--won); border-color: var(--won); font-weight: 600; }
 
 /* Account pop-up: header, segmented tabs, timeline */
